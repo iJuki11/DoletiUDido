@@ -239,6 +239,22 @@ export class Player {
     return this.hp;
   }
 
+  /**
+   * Restore HP from a friendly pickup (e.g. NPCKonobari). Capped by MAX_HP
+   * so a chain of pickups can never exceed the design cap. Damage and
+   * invincibility do not gate pickups — the player is always allowed to
+   * heal back up.
+   *
+   * Returns the new hp value so callers (e.g. game.js wiring the konobari
+   * onPlayerHit callback) can decide whether the heal actually changed
+   * anything (e.g. suppress HUD animation when already at max).
+   */
+  grantHealth(amount = 1) {
+    const heal = Math.max(0, Number(amount) || 0);
+    this.hp = Math.min(MAX_HP, this.hp + heal);
+    return this.hp;
+  }
+
   isDead() {
     return this.hp <= 0;
   }

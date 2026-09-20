@@ -14,6 +14,7 @@
 import { NPCPrsan } from "./npc_prsan.js";
 import { NPCNidjo } from "./npc_nidjo.js";
 import { NPCToni } from "./npc_toni.js";
+import { NPCKonobari } from "./npc_konobari.js";
 
 /**
  * Sub-manager for the "prsan" paratrooper NPC.
@@ -383,6 +384,153 @@ export class NPCToniManager {
 }
 
 /**
+ * Sub-manager for the "konobari" friendly NPC. Spawns a sprite-sheet
+ * character anywhere on the screen (uniform random y) and walks it
+ * across the screen. On player overlap it grants +1 HP and is removed.
+ *
+ * Lifetime: at most one konobari on screen. Direction (+1/-1) is randomised
+ * on every spawn; speed is randomised in [minSpeed, maxSpeed].
+ *
+ * Despawn uses getBounds() so the sprite vanishes only after its full AABB
+ * has cleared the nearest edge (same standard as NPCNidjoManager /
+ * NPCToniManager after their despawn-margin fix).
+ *
+ * `onPlayerHit` is the integration seam — wired by game.js to apply the
+ * +1 HP and refresh the HUD, keeping this manager free of player/HUD
+ * concerns.
+ */
+export class NPCKonobariManager {
+  constructor({
+    minInterval = 12,
+    maxInterval = 22,
+    spawnMargin = 120,
+    minSpeed = 90,
+    maxSpeed = 150,
+    onPlayerHit = null,
+  } = {}) {
+    this.minInterval = minInterval;
+    this.maxInterval = maxInterval;
+    this.spawnMargin = spawnMargin;
+    this.minSpeed = minSpeed;
+    this.maxSpeed = maxSpeed;
+    // Optional callback invoked the moment a player overlap is accepted.
+    this.onPlayerHit = typeof onPlayerHit === "function" ? onPlayerHit : null;
+
+    this.instances = [];
+    this.scheduleNext();
+  }
+
+  /** Roll a random duration until the next spawn attempt. */
+  scheduleNext() {
+    const span = Math.max(0, this.maxInterval - this.minInterval);
+    this.nextSpawn = this.minInterval + Math.random() * span;
+  }
+
+  /**
+   * Create one konobari instance: randomised direction (left or right),
+   * random forward speed, drawn anywhere across the canvas y-axis.
+   * Returns the new instance so callers (tests, debug overlays) can grab it.
+   */
+  spawnOne(width, height) {
+    const scale = 0.5;
+    // -1 or +1 with equal probability — alternating traffic both ways.
+    const direction = Math.random() < 0.5 ? -1 : 1;
+    const speed = this.minSpeed + Math.random() * (this.maxSpeed - this.minSpeed);
+    // Spawn just off the appropriate edge with a small margin so the
+    // sprite doesn't pop into existence fully on-screen.
+    const x = direction > 0
+      ? -this.spawnMargin
+      : width + this.spawnMargin;
+    // Uniform random y anywhere on the canvas — the sprite's anchor sits
+    // there directly (KonobariAnimation handles its own bobbing via the
+    // sprite-sheet frames, so no extra y-offset is needed).
+    const y = Math.random() * Math.max(1, height);
+
+    const konobar = new NPCKonobari(x, y, {
+      scale,
+      direction,
+      velocityX: direction * speed,
+    });
+    this.instances.push(konobar);
+    return konobar;
+  }
+
+  /** Tick timers, walk every active instance, and resolve player overlaps. */
+  update(deltaTime, width, height, player) {
+    if (!Number.isFinite(deltaTime) || deltaTime <= 0) return;
+
+    this.timer = (this.timer || 0) + deltaTime;
+
+    // Spawn gate: at most one konobari on screen.
+    if (this.instances.length === 0 && this.timer >= this.nextSpawn) {
+      this.timer = 0;
+      this.scheduleNext();
+      this.spawnOne(width, height);
+    }
+
+    // Step every instance, drop stragglers, then check player overlap.
+    for (const konobar of this.instances) {
+      konobar.update(deltaTime);
+    }
+    this.despawnIfOffscreen(width);
+    this.checkPlayerOverlap(player);
+  }
+
+  /** Remove any instance whose full AABB has cleared the nearest edge. */
+  despawnIfOffscreen(width) {
+    this.instances = this.instances.filter((konobar) => {
+      const b = konobar.getBounds();
+      const pastLeft = b.right < 0 && konobar.direction < 0;
+      const pastRight = b.left > width && konobar.direction > 0;
+      return !(pastLeft || pastRight);
+    });
+  }
+
+  /**
+   * If the player AABB overlaps any active konobari, fire the
+   * onPlayerHit callback and remove that instance (consumed on touch).
+   * Player invincibility does not gate pickups — granting +1 HP is always
+   * welcome — but we still guard against double-fires within a single
+   * frame via the despawn-on-hit rule.
+   */
+  checkPlayerOverlap(player) {
+    if (!player || typeof player.getBounds !== "function") return;
+    const playerBounds = player.getBounds();
+    if (!playerBounds) return;
+    this.instances = this.instances.filter((konobar) => {
+      const b = konobar.getBounds();
+      const overlaps = !(
+        b.right < playerBounds.left ||
+        b.left > playerBounds.right ||
+        b.bottom < playerBounds.top ||
+        b.top > playerBounds.bottom
+      );
+      if (overlaps) {
+        // Fire the callback once for the consumed instance; game.js wires
+        // this to player.grantHealth(1) + HUD refresh.
+        this.onPlayerHit?.(konobar.x, konobar.y);
+        return false; // remove from instances
+      }
+      return true;
+    });
+  }
+
+  /** Render every active instance via its own draw method. */
+  draw(context) {
+    for (const konobar of this.instances) {
+      konobar.draw(context);
+    }
+  }
+
+  /** Wipe all instances and reset timers — called on game restart. */
+  reset() {
+    this.instances = [];
+    this.timer = 0;
+    this.scheduleNext();
+  }
+}
+
+/**
  * NPCManager — top-level facade for every NPC type in the game.
  *
  * Currently owns a single sub-manager (prsan). New sub-managers can be
@@ -391,27 +539,43 @@ export class NPCToniManager {
  * sub-manager is the same three methods: update, draw, reset.
  */
 export class NPCManager {
-  constructor() {
+  constructor({ onPlayerHit = null } = {}) {
     this.Prsan = new NPCPrsanManager();
     this.Nidjo = new NPCNidjoManager();
     this.Toni = new NPCToniManager();
+    // Konobari is the only sub-manager that needs the player reference
+    // (for pickup overlap detection) and an onPlayerHit callback (to apply
+    // +1 HP and refresh the HUD). game.js wires both via the parent's
+    // constructor options.
+    this.Konobari = new NPCKonobariManager({
+      onPlayerHit: typeof onPlayerHit === "function" ? onPlayerHit : null,
+    });
   }
 
-  update(deltaTime, width, height, groundY) {
+  attachPlayer(player) {
+    // Game.js calls this once after both manager and player exist; it just
+    // gives Konobari the player it needs for overlap detection.
+    this.Konobari.player = player;
+  }
+
+  update(deltaTime, width, height, groundY, player) {
     this.Prsan.update(deltaTime, width, height);
     this.Nidjo.update(deltaTime, width, height, groundY);
     this.Toni.update(deltaTime, width, height, groundY);
+    this.Konobari.update(deltaTime, width, height, player);
   }
 
   draw(context) {
     this.Prsan.draw(context);
     this.Nidjo.draw(context);
     this.Toni.draw(context);
+    this.Konobari.draw(context);
   }
 
   reset() {
     this.Prsan.reset();
     this.Nidjo.reset();
     this.Toni.reset();
+    this.Konobari.reset();
   }
 }

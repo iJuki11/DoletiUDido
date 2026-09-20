@@ -132,7 +132,18 @@ export class Game {
         this.ui.update(this.snapshot());
       },
     });
-    this.npcManager = new NPCManager();
+    this.npcManager = new NPCManager({
+      // Konobari pickup: +1 HP, capped by Player.MAX_HP. Visual feedback is
+      // intentionally silent per the design brief — only the HUD heart icon
+      // updates, picked up by ui.update() reading the new player.hp.
+      onPlayerHit: () => {
+        this.player.grantHealth(1);
+        this.ui.update(this.snapshot());
+      },
+    });
+    // KonobariManager needs the player reference each frame for AABB
+    // overlap detection; resetting in place keeps the same instance alive.
+    this.npcManager.attachPlayer(this.player);
     // Crow enemy — same lifecycle as the airplane (single active instance,
     // bell-curve SFX, AABB collision against the player) but rendered from
     // enemy_bird.svg parts instead of a hand-drawn canvas. AssetLoader is
@@ -456,7 +467,7 @@ export class Game {
     const levelConfig = this.getLevelConfig();
     this.airplaneManager.update(deltaTime, this.width, this.height, this.player, levelConfig);
     this.birdManager.update(deltaTime, this.width, this.height, this.player, levelConfig);
-    this.npcManager.update(deltaTime, this.width, this.height, groundY);
+    this.npcManager.update(deltaTime, this.width, this.height, groundY, this.player);
     this.collisionEffects.update(deltaTime);
     const collectedItems = this.collectibles.collect(this.player.getBounds());
 
