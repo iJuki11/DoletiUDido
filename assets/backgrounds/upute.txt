@@ -1,0 +1,128 @@
+Format projekta za Hermes
+
+Glavni izlaz editora je jedan samostalan `*.parallax.json`, format `scena-parallax`, version 1. Slike su u `assets[].data` kao data URI. Korišteni asseti identificiraju se putem `assetId` u objektu.
+
+Izvoz **samo petlje** ima `exportMode: "loop-only"`. U njemu je izvorni odabrani pravokutnik (`sourceRegion.start/end`) već izrezan i pomaknut na X=0. Svaki vidljivi sloj zasebno je rasteriziran u PNG dijelove širine najviše 4096 px. Dijelovi su na susjednim X pozicijama, imaju `repeat: "loop"` i ponavljaju se u periodu **cijele** petlje `scene.loop.end`, ne vlastite širine. Prozirnost objekata ugrađena je u PNG; prozirnost sloja još se primjenjuje pri crtanju. Redoslijed i parallax slojeva ostaju sačuvani. Nema uvoda niti sadržaja izvan odabranog raspona. Isti renderer radi bez promjena. Za pojedinačno uređivanje izvornih elemenata koristi se puni projekt.
+
+**Ne sabijati duljinu petlje u ekran.** `scene.canvas.width` označava širinu vidljivog kadra u koordinatama scene, a `scene.loop.end - scene.loop.start` duljinu ponavljanja. Pri prilagodbi ekranu održati omjer prikaza, odnosno uskladiti `viewportWidth` s omjerom izlazne širine i visine ako igra mijenja format kadra.
+
+## Ponavljanje izrezane petlje bez rastućih praznina
+
+Za `exportMode: "loop-only"` koristite ugrađeni `rendering.rendererSource` ili ekvivalentnu logiku ispod. Renderer prima ukupni `cameraX` u **pikselima scene**, prije parallaxa i skaliranja na ekran. Crta u koordinatama ekrana: pozovite ga bez dodatne transformacije kamere iz game enginea. Pomak kamere i parallax primjenjuju se samo jednom.
+
+Za svakog sloja zasebno vrijedi:
+
+```js
+const L = scene.loop.end - scene.loop.start;
+const offset = cameraX * layer.parallax;
+const phase = ((offset % L) + L) % L;
+// Samo za loop-only, čiji je početak normaliziran na 0.
+for (const object of layer.objects) {
+  const first = Math.ceil((phase - object.x - object.width) / L);
+  const last = Math.floor((phase + viewportWidth - object.x) / L);
+  for (let k = first; k <= last; k++) {
+    const x = object.x + k * L - phase;
+    // Nacrtaj PNG na (x, object.y), veličine object.width × object.height.
+    // Primijeni layer.opacity i object.opacity te postojeći alpha PNG-a.
+  }
+}
+```
+
+`viewportWidth`, `object.x`, `object.width`, `L` i `cameraX` moraju biti u istim pikselima scene. Skalirajte cijeli rezultat jednom. Ako je skala 0.5, petlja 4500 px zauzima 2250 piksela prikaza; i širina slike i razmak kopija skaliraju se za 0.5.
+
+Za petlju od **4500 px** izvoz po sloju sadrži dva susjedna dijela: `x=0, width=4096` i `x=4096, width=404`. To su dijelovi **iste petlje**, a ne dva uzastopna cijela backgrounda. Ponavljanje za k=1 stavlja ih na X=4500 i X=8596 prije pomaka kamere. Oba dijela ponavljaju se svakih **4500**, ne svakih 4096 ili 404. Nemojte PNG-ove dodatno obrezivati prema vidljivom sadržaju.
+
+Razmak odgovarajućih kopija jednog sloja uvijek je `L`. Parallax mijenja samo njegov pomak/brzinu, **ne razmak kopija ni njihove dimenzije**. Primjerice, uz parallax 0.34 sloj se vrati u istu fazu nakon što kamera prijeđe `4500 / 0.34 ≈ 13235.29` px. Svaki sloj ima vlastitu fazu: nemojte generirati sve slojeve prema jednom zajedničkom brojaču krugova, resetirati kameru na 4500 ili nove kopije postavljati prema ukupnoj udaljenosti igrača. Vidljive kopije izračunajte iz položaja kamere svakog framea; ne ograničavajte se trajno na prve dvije kopije.
+
+Provjerite 100 prolaza, za parallax 0, 0.16, 0.34, 0.62 i 1, uključujući spoj 4096/404, granicu 4500 i kadar širi od petlje. Kod pune neprozirne podloge nijedan stupac kadra ne smije ostati nepokriven. Već proziran rub PNG-a ponavljat će istu prazninu, ali se ona ne smije povećavati iz kruga u krug. Različiti slojevi namjerno mijenjaju međusobni položaj; to nije isto što i rast razmaka između kopija istog sloja.
+
+`scene.layers` i `layer.objects` su poredani od pozadine prema prednjem planu. `x/y` je gornji lijevi kut elementa u pikselima scene. `width/height` su prikazne dimenzije; izvorna veličina slike je u `assets`. Zrcaljenje je oko središta prikaznog pravokutnika. Ne uklanjati prozirne rubove bez odgovarajuće prilagodbe pozicije.
+
+Položaj sloja tijekom vožnje: `offset = cameraX * layer.parallax`. Kamera se ne resetira pri prelasku granice petlje.
+
+Segment petlje je `[scene.loop.start, scene.loop.end)`. Njegova je duljina `end - start`. `repeat=auto` se ponavlja ako je X objekta unutar segmenta, inače se crta jednom. `loop` se uvijek ponavlja, `once` nikad. Ponavljajuća pozicija normalizira se u segment, zatim se crtaju kopije na razmacima duljine segmenta. Kopije se odrezuju prije `loop.start`. Dijelovi objekta koji prelaze rub petlje tako se pojavljuju na drugoj strani. Jednokratni elementi nisu ograničeni na duljinu uvoda: crtaju se jednom na pohranjenom položaju.
+
+Parallax je po sloju, pa se slojevi različitih brzina ne vraćaju svi u isti kadar istovremeno. `opacity` sloja i objekta množe se s postojećim alfa kanalom PNG-a; vrijednosti za sunce i oblake već su ugrađene u sliku.
+
+Polja `locked`, `surface` i `surfaceIntroFor` služe uređivanju. Ne utječu na renderiranje. Vidljivost `visible=false` znači preskakanje pri crtanju. `surfaceIntroFor` povezuje automatski dodanu podlogu uvoda s podlogom petlje, radi ponovnog prilagođavanja u editoru.
+
+Izvoz uključuje točan referentni renderer u `rendering.rendererSource`. Isti je kod u `renderer.js`. Primjer integracije za Canvas 2D nakon učitavanja te skripte:
+
+```js
+const project = await (await fetch('Moj-grad.parallax.json')).json();
+const images = new Map();
+await Promise.all(project.assets.map(async asset => {
+  const img = new Image();
+  img.src = asset.data;
+  await img.decode();
+  images.set(asset.id, img);
+}));
+
+// Pozivati prije iscrtavanja lika i ostalih elemenata igre.
+ParallaxRuntime.render(ctx, project.scene, images, cameraX, {
+  width: canvas.width,
+  height: canvas.height,
+  viewportWidth: project.scene.canvas.width
+});
+```
+
+Renderer ne sadrži logiku animacije kamere ili skaliranje prema devicePixelRatio; to određuje igra. Za drugi engine prevesti isti raspored i pravila, a ne spojiti elemente u jednu sliku. JSON je moguće ponovno otvoriti u editoru.
+
+## ZOOM_BACKGROUND — udaljavanje cijele pozadine
+
+**Zahtjev za implementaciju u igri:** dodati zasebnu konfiguracijsku varijablu točno nazvanu `ZOOM_BACKGROUND`. Početna predložena vrijednost je `0.75`; `1` znači postojeću veličinu, `0.75` smanjuje širine i visine na 75% i prikazuje oko 33% više scene po širini, a `0.5` prikazuje dvostruko više scene po širini. Vrijednosti veće od 1 približavaju pozadinu. Koristiti pozitivne konačne vrijednosti, primjerice raspon 0.25–2 u korisničkoj kontroli.
+
+Zoom se odnosi samo na dekorativnu pozadinu. Ne mijenjati veličinu igrača, kolizije, fiziku, HUD ni brzinu igre. Ne prepisivati PNG-ove, koordinate u JSON-u, duljinu petlje ili `layer.parallax`. Predloženi zoom primjenjuje se na sve slojeve pozadine jednako i čuva njihov međusobni raspored u svakom trenutku.
+
+Neka `baseScale` bude postojeća jednolika skala iz piksela scene u logičke piksele prikaza pri zoomu 1. Računati:
+
+```js
+let ZOOM_BACKGROUND = 0.75;
+const scale = baseScale * ZOOM_BACKGROUND;
+const viewportWidth = viewWidth / scale;
+const groundOffsetY = groundScreenY - scene.groundY * scale;
+// X je usidren na lijevi rub kadra; Y na razinu tla u igri.
+// Za jednu kopiju objekta sloja:
+const screenX = (object.x + k * loopLength - cameraX * layer.parallax) * scale;
+const screenY = groundOffsetY + object.y * scale;
+const screenWidth = object.width * scale;
+const screenHeight = object.height * scale;
+```
+
+`groundScreenY` je postojeća visina tla u igri u logičkim pikselima prikaza. Time se kuće pri udaljavanju smanjuju prema tlu, umjesto da im donji rub počne lebdjeti. Lijevi rub ostaje horizontalno sidro; nemojte istodobno dodavati novu transformaciju kamere iz enginea.
+
+### Primjena na priloženi Canvas 2D renderer
+
+Sljedeći poziv **zamjenjuje prethodni poziv renderera**, ne dodaje se iza njega. `viewWidth`, `viewHeight` i `groundScreenY` su logički pikseli prikaza (npr. CSS pikseli); DPR se postavlja jednom u glavnom renderiranju igre. `cameraX` ostaje kontinuirana udaljenost u pikselima scene, ne već skalirana udaljenost ekrana.
+
+```js
+function drawZoomedBackground(ctx, project, images, cameraX, {
+  viewWidth, viewHeight, groundScreenY,
+  baseScale = viewHeight / project.scene.canvas.height
+}) {
+  const scene = project.scene;
+  const zoom = Number.isFinite(ZOOM_BACKGROUND) && ZOOM_BACKGROUND > 0
+    ? ZOOM_BACKGROUND : 1;
+  const scale = baseScale * zoom;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, viewWidth, viewHeight);
+  ctx.clip();
+  ctx.translate(0, groundScreenY - scene.groundY * scale);
+  ParallaxRuntime.render(ctx, scene, images, cameraX, {
+    width: viewWidth,
+    height: scene.canvas.height * scale,
+    viewportWidth: viewWidth / scale,
+    clear: false
+  });
+  ctx.restore();
+}
+```
+
+Ovdje renderer već skalira obje osi jednako: `width / viewportWidth = scale` i `height / scene.canvas.height = scale`. **Ne dodavati još jedan `ctx.scale(scale, scale)` oko poziva.** Zoom namjerno smanjuje i brzinu dekorativnog pomicanja u pikselima ekrana, poput udaljene scene; relativne parallax brzine ostaju iste. Ne dijeliti `cameraX` zoomom radi kompenzacije.
+
+**Pokrivanje vrha i dna:** pri udaljavanju konačna visina PNG slojeva više ne pokriva cijeli ekran. Prije ovog poziva, u svakom frameu popuniti cijeli kadar osnovnim nebom/gradijentom, a područje ispod `groundScreenY` bojom tla/ceste. Te osnovne podloge moraju pokrivati cijeli ekran neovisno o zoomu. Ako postoje posebni beskonačni slojevi neba i tla u igri, mogu odraditi tu popunu. Ne rastezati kuće samo po Y da bi zatvorile prazninu. Kod izrezane petlje objekti unutar istog sloja već su spojeni, pa se proizvoljni pojedinačni objekt ne može izdvojiti bez izvornog projekta.
+
+**Petlja i provjera:** izračun vidljivih kopija mora koristiti prošireni `viewportWidth = viewWidth / scale`. Razmak kopija na ekranu je `loopLength * scale`, a širina PNG dijela je `object.width * scale`. Za petlju 4500 i `baseScale=1`, zoom 0.75 daje period 3375 piksela prikaza, s dijelovima širine 3072 i 303. Oni i dalje dodiruju rubove bez razmaka. Provjeriti zoom 1, 0.75 i 0.5 kroz 100 ponavljanja, uključujući ekran širi od jednog perioda; tlo ostaje na istom Y, igrač iste veličine, a ne pojavljuju se rastuće rupe ni prazne trake iznad/ispod pozadine.
+
+Ovo je dopuna integraciji igre. `ZOOM_BACKGROUND` nije novo polje koje postojeći renderer automatski čita iz JSON-a: Hermes treba dodati varijablu u konfiguraciju igre i koristiti je u pozivu iznad. Postojeći izvoz petlje i PNG-ovi mogu ostati isti.

@@ -1,0 +1,254 @@
+{
+  "name": "Urban cafe · parallax assets",
+  "canvas": {
+    "width": 2172,
+    "height": 724
+  },
+  "groundY": 595,
+  "version": 2,
+  "coordinates": "All layers are full 2172×724 canvases. Place at 0,0. Back-to-front array order. cameraX is in reference pixels.",
+  "alpha": "Sun/cloud opacity is baked into PNG alpha. Render every layer with globalAlpha=1.",
+  "palette": {
+    "sky": [
+      "#c7cbca",
+      "#aeb4b5",
+      "#858c8e"
+    ],
+    "sun": "rgba(242,240,225,0.38)",
+    "clouds": "rgba(235,237,233,0.55)",
+    "far": "#969c9e",
+    "mid": "#737a7c",
+    "near": "#50575a",
+    "road": "#2f3436",
+    "curb": "#454b4d",
+    "windows": "rgba(210,213,210,0.32)"
+  },
+  "notes": [
+    "Cafe and house retain muted colors. Imagegen reconstructed hidden architecture; not a pixel-exact separation.",
+    "Foreground houses are separated into three transparent rows at .48/.55/.62. Individual building sprites and placements are also included.",
+    "All active layers use normal repetition, except fixed sky. Transparent margins and gaps are intentional. No mirrored tiles required for this default layout.",
+    "Generated building colors approximate the gray palette; native SVG backgrounds use exact supplied colors.",
+    "House/cafe values .69/.78 are adjustable suggestions. Independent movement changes their overlap over long distances.",
+    "The earlier continuous near-street row is available only as an optional variant. It requires alternating normal and mirrored tiles."
+  ],
+  "layers": [
+    {
+      "id": "01-sky",
+      "label": "Nebo",
+      "file": "layers/01-sky.png",
+      "parallax": 0,
+      "repeat": "fixed",
+      "opacity": 1
+    },
+    {
+      "id": "02-sun",
+      "label": "Sunce",
+      "file": "layers/02-sun.png",
+      "parallax": 0.025,
+      "repeat": "repeat",
+      "opacity": 1
+    },
+    {
+      "id": "03-clouds",
+      "label": "Oblaci",
+      "file": "layers/03-clouds.png",
+      "parallax": 0.07,
+      "repeat": "repeat",
+      "opacity": 1
+    },
+    {
+      "id": "04-skyline-far",
+      "label": "Skyline 1 · daleki",
+      "file": "layers/04-skyline-far.png",
+      "parallax": 0.16,
+      "repeat": "repeat",
+      "opacity": 1
+    },
+    {
+      "id": "05-skyline-mid",
+      "label": "Skyline 2 · srednji",
+      "file": "layers/05-skyline-mid.png",
+      "parallax": 0.34,
+      "repeat": "repeat",
+      "opacity": 1
+    },
+    {
+      "id": "06a-houses-back",
+      "label": "Kuće · stražnji red",
+      "parallax": 0.48,
+      "buildings": [
+        {
+          "asset": "apartment",
+          "x": 18,
+          "y": 134,
+          "width": 182,
+          "height": 461
+        },
+        {
+          "asset": "narrow-house",
+          "x": 590,
+          "y": 287,
+          "width": 150,
+          "height": 308
+        },
+        {
+          "asset": "narrow-house",
+          "x": 1685,
+          "y": 283,
+          "width": 152,
+          "height": 312
+        },
+        {
+          "asset": "apartment",
+          "x": 2000,
+          "y": 206,
+          "width": 154,
+          "height": 389
+        }
+      ],
+      "file": "layers/06a-houses-back.png",
+      "repeat": "repeat",
+      "opacity": 1
+    },
+    {
+      "id": "06b-houses-middle",
+      "label": "Kuće · srednji red",
+      "parallax": 0.55,
+      "buildings": [
+        {
+          "asset": "gable-shop",
+          "x": 200,
+          "y": 355,
+          "width": 260,
+          "height": 240
+        },
+        {
+          "asset": "gable-shop",
+          "x": 840,
+          "y": 359,
+          "width": 255,
+          "height": 236
+        },
+        {
+          "asset": "awning-shop",
+          "x": 1780,
+          "y": 347,
+          "width": 210,
+          "height": 248
+        }
+      ],
+      "file": "layers/06b-houses-middle.png",
+      "repeat": "repeat",
+      "opacity": 1
+    },
+    {
+      "id": "06c-houses-front",
+      "label": "Kuće · prednji red",
+      "parallax": 0.62,
+      "buildings": [
+        {
+          "asset": "awning-shop",
+          "x": 455,
+          "y": 359,
+          "width": 200,
+          "height": 236
+        },
+        {
+          "asset": "gable-shop",
+          "x": 1460,
+          "y": 369,
+          "width": 245,
+          "height": 226
+        },
+        {
+          "asset": "narrow-house",
+          "x": 750,
+          "y": 328,
+          "width": 130,
+          "height": 267
+        }
+      ],
+      "file": "layers/06c-houses-front.png",
+      "repeat": "repeat",
+      "opacity": 1
+    },
+    {
+      "id": "07-house",
+      "label": "Kuća iza kafića",
+      "file": "layers/07-house.png",
+      "parallax": 0.69,
+      "repeat": "repeat",
+      "opacity": 1,
+      "sprite": {
+        "file": "sprites/07-house.png",
+        "x": 1063,
+        "y": 167,
+        "width": 615,
+        "height": 427
+      },
+      "generated": true
+    },
+    {
+      "id": "08-cafe",
+      "label": "Kafić",
+      "file": "layers/08-cafe.png",
+      "parallax": 0.78,
+      "repeat": "repeat",
+      "opacity": 1,
+      "sprite": {
+        "file": "sprites/08-cafe.png",
+        "x": 665,
+        "y": 253,
+        "width": 800,
+        "height": 343
+      },
+      "generated": true
+    },
+    {
+      "id": "09-lamps",
+      "label": "Ulične lampe",
+      "file": "layers/09-lamps.png",
+      "parallax": 0.82,
+      "repeat": "repeat",
+      "opacity": 1
+    },
+    {
+      "id": "10-road",
+      "label": "Nogostup i cesta",
+      "file": "layers/10-road.png",
+      "parallax": 1,
+      "repeat": "repeat",
+      "opacity": 1
+    }
+  ],
+  "buildingSprites": [
+    {
+      "id": "apartment",
+      "label": "Stambena zgrada",
+      "file": "sprites/building-apartment.png",
+      "width": 506,
+      "height": 1273
+    },
+    {
+      "id": "gable-shop",
+      "label": "Kuća s kosim krovom",
+      "file": "sprites/building-gable-shop.png",
+      "width": 1018,
+      "height": 938
+    },
+    {
+      "id": "awning-shop",
+      "label": "Kuća s tendom",
+      "file": "sprites/building-awning-shop.png",
+      "width": 811,
+      "height": 956
+    },
+    {
+      "id": "narrow-house",
+      "label": "Uska gradska kuća",
+      "file": "sprites/building-narrow-house.png",
+      "width": 640,
+      "height": 1312
+    }
+  ]
+}

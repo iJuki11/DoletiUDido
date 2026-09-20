@@ -1,0 +1,1129 @@
+<!doctype html>
+<html lang="hr">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parallax editor · Gradska pozadina</title>
+<style>
+  :root {
+    --bg: #151b1d;
+    --bg-card: #202a2c;
+    --bg-card-2: #2a3538;
+    --border: #354244;
+    --border-2: #495554;
+    --fg: #e9ece8;
+    --fg-dim: #a5b0af;
+    --fg-dimmer: #99aaa6;
+    --accent: #d4e3d2;
+    --accent-2: #b8d2c3;
+    --danger: #e07b6b;
+    --warn: #e9c46a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+    height: 100vh;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-card);
+  }
+  header h1 {
+    font-size: 17px;
+    margin: 0;
+    letter-spacing: -0.3px;
+  }
+  header .tag {
+    color: var(--accent-2);
+    font-size: 11px;
+    letter-spacing: 1.5px;
+  }
+  header .pill {
+    font-size: 11px;
+    color: var(--accent-2);
+    border: 1px solid #40504a;
+    padding: 4px 10px;
+    border-radius: 30px;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    height: calc(100vh - 53px);
+  }
+  @media (max-width: 1000px) {
+    .layout { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+    .sidebar { max-height: 40vh; overflow-y: auto; }
+  }
+  .stage {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .stage-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .stage-canvas-wrap {
+    flex: 1;
+    overflow: auto;
+    background: repeating-conic-gradient(#a2a9a9 0 25%, #c2c6c4 0 50%) 0/24px 24px;
+    padding: 16px;
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+  }
+  canvas#scene {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-width: 100%;
+    background: #fff;
+    border: 1px solid var(--border-2);
+    image-rendering: pixelated;
+  }
+  .sidebar {
+    background: var(--bg-card);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .section {
+    background: var(--bg-card-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+  }
+  .section h2 {
+    margin: 0 0 10px;
+    font-size: 12px;
+    letter-spacing: 1px;
+    color: var(--accent-2);
+    text-transform: uppercase;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 0;
+    font-size: 13px;
+  }
+  .row label { flex: 1; color: var(--fg-dim); }
+  .row .value { font-variant-numeric: tabular-nums; min-width: 50px; text-align: right; color: var(--fg); }
+  input[type="range"] { accent-color: var(--accent); flex: 1; min-width: 60px; }
+  input[type="checkbox"] { accent-color: var(--accent); }
+  button, .btn {
+    background: #303c3d;
+    border: 1px solid var(--border-2);
+    border-radius: 6px;
+    padding: 6px 12px;
+    cursor: pointer;
+    color: inherit;
+    font: inherit;
+    font-size: 12px;
+    transition: background 0.1s;
+  }
+  button:hover, .btn:hover { background: #455454; }
+  button.primary, .btn.primary {
+    color: #182521;
+    background: var(--accent);
+    border-color: var(--accent);
+    font-weight: 500;
+  }
+  button.primary:hover { background: #c5d8c2; }
+  button.danger {
+    background: #5a3a35;
+    border-color: #8b5a52;
+    color: var(--danger);
+  }
+  button.danger:hover { background: #6b463f; }
+  button.active {
+    background: var(--accent);
+    color: #182521;
+    border-color: var(--accent);
+  }
+  button:disabled { opacity: 0.4; cursor: wait; }
+  .grid-5 {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+  }
+  @media (min-width: 1400px) { .grid-5 { grid-template-columns: repeat(3, 1fr); } }
+  .layer-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+  .layer-card.selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+  .layer-card.fixed .speed-row { opacity: 0.4; }
+  .layer-card .head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+  }
+  .layer-card .head label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg);
+  }
+  .speed-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-top: 4px;
+  }
+  .speed-row input { flex: 1; }
+  .speed-row output { min-width: 36px; text-align: right; font-variant-numeric: tabular-nums; color: var(--fg-dim); }
+  .sprite-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px;
+    cursor: grab;
+    text-align: center;
+    user-select: none;
+  }
+  .sprite-card:hover { border-color: var(--accent); }
+  .sprite-card.selected { border-color: var(--accent); background: #2a3538; }
+  .sprite-card .preview {
+    width: 100%;
+    height: 64px;
+    background: repeating-conic-gradient(#3a4444 0 25%, #4a5454 0 50%) 0/12px 12px;
+    border-radius: 4px;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .sprite-card .preview img { max-width: 100%; max-height: 100%; display: block; }
+  .sprite-card .name {
+    font-size: 11px;
+    color: var(--fg-dim);
+  }
+  .selected-info {
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .selected-info .field {
+    display: grid;
+    grid-template-columns: 60px 1fr;
+    align-items: center;
+    gap: 6px;
+    margin: 3px 0;
+  }
+  .selected-info input[type="number"] {
+    background: var(--bg-card);
+    border: 1px solid var(--border-2);
+    border-radius: 4px;
+    padding: 3px 6px;
+    color: var(--fg);
+    width: 100%;
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+  }
+  .selected-info .label {
+    color: var(--fg-dim);
+    font-size: 11px;
+  }
+  .scale-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    margin-top: 6px;
+  }
+  .scale-row button { padding: 5px 0; font-size: 11px; }
+  textarea.export {
+    width: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--border-2);
+    border-radius: 4px;
+    padding: 6px;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    resize: vertical;
+    min-height: 100px;
+    max-height: 280px;
+  }
+  .status-bar {
+    font-size: 11px;
+    color: var(--fg-dimmer);
+    padding: 4px 14px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-card);
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .status-bar .ok { color: var(--accent-2); }
+  .status-bar .err { color: var(--danger); }
+  .mode-toggle {
+    display: flex;
+    gap: 0;
+    border: 1px solid var(--border-2);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .mode-toggle button {
+    border-radius: 0;
+    border: 0;
+    border-right: 1px solid var(--border-2);
+    background: var(--bg-card);
+    padding: 6px 12px;
+    font-size: 12px;
+  }
+  .mode-toggle button:last-child { border-right: 0; }
+  .mode-toggle button.active { background: var(--accent); color: #182521; }
+  .legend {
+    display: flex;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--fg-dimmer);
+    align-items: center;
+  }
+  .legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+  .legend .dot.bbox { background: var(--warn); }
+  .legend .dot.handle { background: var(--accent); }
+  .legend .dot.selected { background: var(--warn); border: 2px solid var(--accent); }
+  .small-note { font-size: 11px; color: var(--fg-dimmer); line-height: 1.5; margin-top: 6px; }
+  .kbd {
+    background: var(--bg-card);
+    border: 1px solid var(--border-2);
+    border-radius: 3px;
+    padding: 0 5px;
+    font: 11px ui-monospace, Menlo, monospace;
+    color: var(--fg-dim);
+  }
+</style>
+<main>
+  <header>
+    <div>
+      <div class="tag">PARALLAX EDITOR · v1</div>
+      <h1>Gradska pozadina · sloji, dodaj, namjesti</h1>
+    </div>
+    <span class="pill" id="canvas-info">2172 × 724</span>
+  </header>
+  <div class="layout">
+    <div class="stage">
+      <div class="stage-toolbar">
+        <button id="play" class="primary" disabled>▶ Pokreni</button>
+        <button id="reset">⏮ Početni kadar</button>
+        <label style="display:flex;align-items:center;gap:6px;color:var(--fg-dim);font-size:12px;">
+          Pomak <input id="camera" type="range" min="-8000" max="8000" step="1" value="0" style="width:160px;">
+        </label>
+        <span id="status" style="font-size:12px;color:var(--accent-2);min-width:80px;">Učitavanje…</span>
+        <label style="display:flex;align-items:center;gap:6px;color:var(--fg-dim);font-size:12px;">
+          Brzina <input id="velocity" type="range" min="0" max="600" value="100" style="width:80px;">
+        </label>
+        <span style="flex:1"></span>
+        <label style="display:flex;align-items:center;gap:6px;color:var(--fg-dim);font-size:12px;">
+          <input type="checkbox" id="show-loop" checked> Pokaži seamless overlay
+        </label>
+      </div>
+      <div class="stage-canvas-wrap" id="canvas-wrap">
+        <canvas id="scene" width="2172" height="724" aria-label="Parallax editor canvas"></canvas>
+      </div>
+      <div class="status-bar">
+        <span id="hint">Učitavam asset-e…</span>
+        <span id="loop-info"></span>
+      </div>
+    </div>
+    <aside class="sidebar">
+      <div class="section">
+        <h2>Mod uređivanja</h2>
+        <div class="mode-toggle" id="mode-toggle">
+          <button data-mode="view" class="active">Pregled</button>
+          <button data-mode="add">Dodaj zgradu</button>
+          <button data-mode="edit">Uredi zgradu</button>
+        </div>
+        <p class="small-note">
+          <strong>Pregled:</strong> canvas se ponaša kao originalni preview.<br>
+          <strong>Dodaj:</strong> odaberi sprite ispod, klikni na canvas da dodaš zgradu.<br>
+          <strong>Uredi:</strong> klikni na zgradu, vuči je ili koristi numeric inputomete.
+          <span class="kbd">Del</span> briše.
+        </p>
+      </div>
+
+      <div class="section">
+        <h2>Viewport · skaliranje</h2>
+        <div class="scale-row" id="scale-row">
+          <button data-scale="1">1.0×</button>
+          <button data-scale="0.5" class="active">0.5×</button>
+          <button data-scale="0.25">0.25×</button>
+          <button data-scale="0.1">0.1×</button>
+        </div>
+        <p class="small-note">Skaliranje je samo CSS — canvas backing store ostaje 2172×724 px (referentni pikseli za parallax).</p>
+      </div>
+
+      <div class="section">
+        <h2>Slojevi</h2>
+        <div class="grid-5" id="layers"></div>
+        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+          <button id="all">Svi</button>
+          <button id="none">Sakrij</button>
+          <button id="solo-active">Samo odabrani</button>
+        </div>
+      </div>
+
+      <div class="section" id="sprite-library">
+        <h2>Sprite library (za Dodaj mod)</h2>
+        <div class="grid-5" id="sprites"></div>
+        <p class="small-note">Sprite-ovi dolaze iz <code>sprites/building-*.png</code>. Dimenzije su iz manifest.json.</p>
+      </div>
+
+      <div class="section" id="selected-section" style="display:none;">
+        <h2>Odabrana zgrada</h2>
+        <div class="selected-info" id="selected-info"></div>
+        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="danger" id="delete-building">Obriši</button>
+          <button id="duplicate-building">Dupliciraj</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>Export</h2>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+          <button id="export-manifest" class="primary">📋 manifest.json patch</button>
+          <button id="export-game">🎮 game.js settings</button>
+        </div>
+        <textarea class="export" id="export-area" placeholder="Klikni export gumb da generiraš JSON / JS snippet za drop-in."></textarea>
+        <p class="small-note">Patch sadrži samo razlike od originalnog manifest.json — siguran za copy-paste.</p>
+      </div>
+    </aside>
+  </div>
+</main>
+<script type="module">
+  import { loadParallax } from './parallax.js';
+
+  // ============ STATE ============
+  const state = {
+    mode: 'view',           // 'view' | 'add' | 'edit'
+    scale: 0.5,             // viewport scale
+    cameraX: 0,
+    playing: false,
+    lastTime: 0,
+    selectedLayerId: null,  // layer for adding buildings
+    selectedSprite: null,   // { id, width, height }
+    selectedBuilding: null, // { layerId, index }
+    showLoop: true,
+    buildingOverrides: {},  // { layerId: [ { asset, x, y, width, height }, ... ] } — replaces manifest.layers[i].buildings
+    originalManifest: null,
+    parallax: null,         // parallax engine instance
+  };
+
+  // ============ DOM ============
+  const $ = (sel) => document.querySelector(sel);
+  const canvas = $('#scene');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const layersEl = $('#layers');
+  const spritesEl = $('#sprites');
+  const exportArea = $('#export-area');
+  const selectedSection = $('#selected-section');
+  const selectedInfo = $('#selected-info');
+  const loopInfo = $('#loop-info');
+  const hint = $('#hint');
+  const status = $('#status');
+
+  // ============ BOOT ============
+  // Use parallax engine to load images & keep original draw loop.
+  // We also keep the raw layer data so we can edit buildings.
+  async function boot() {
+    try {
+      // Fetch raw manifest (we need buildings array which parallax.js strips).
+      const manifestResp = await fetch('./manifest.json');
+      if (!manifestResp.ok) throw new Error(`manifest ${manifestResp.status}`);
+      state.originalManifest = await manifestResp.json();
+
+      // Initialize parallax engine for drawing.
+      state.parallax = await loadParallax('./');
+
+      // Build UI.
+      buildLayerCards();
+      buildSpriteLibrary();
+
+      // Apply initial state from URL hash (for sharing presets).
+      applyHash();
+
+      // Preload sprite images for building overlay.
+      await preloadSprites();
+
+      // Wire events.
+      wireEvents();
+
+      // First draw.
+      draw();
+      hint.textContent = 'Spreman. Mod: Pregled.';
+      hint.className = 'ok';
+      $('#play').disabled = false;
+    } catch (e) {
+      console.error(e);
+      hint.innerHTML = `<span class="err">Greška: ${e.message}</span><br>Provjeri da editor pokrećeš kroz <code>python3 -m http.server</code> u ovom direktoriju.`;
+      hint.className = 'err';
+    }
+  }
+
+  // ============ LAYER CARDS ============
+  function buildLayerCards() {
+    layersEl.innerHTML = '';
+    for (const layer of state.originalManifest.layers) {
+      const card = document.createElement('div');
+      card.className = 'layer-card';
+      if (layer.parallax === 0 || layer.repeat === 'fixed') card.classList.add('fixed');
+      card.dataset.layerId = layer.id;
+      card.innerHTML = `
+        <div class="head">
+          <input type="checkbox" id="toggle-${layer.id}" checked>
+          <label for="toggle-${layer.id}">${layer.label}</label>
+          <button class="solo" style="padding:2px 6px;font-size:10px;border:0;background:#364144;">Solo</button>
+        </div>
+        <div class="speed-row">
+          <span style="font-size:11px;color:var(--fg-dimmer);">⏩</span>
+          <input type="range" min="0" max="1.2" step="0.01" value="${layer.parallax}" data-role="speed">
+          <output>${layer.parallax.toFixed(2)}</output>
+        </div>
+      `;
+      // Toggle
+      card.querySelector(`#toggle-${layer.id}`).onchange = (e) => {
+        state.parallax.manifest.layers.find(l => l.id === layer.id).enabled = e.target.checked;
+        // Note: parallax.js doesn't expose layer toggling. We hack via speeds.
+        // Workaround: we drive the draw loop ourselves below, not via parallax.draw().
+        draw();
+      };
+      // Solo
+      card.querySelector('.solo').onclick = () => {
+        const allCards = layersEl.querySelectorAll('.layer-card');
+        const allChecks = allCards.forEach(c => {
+          const check = c.querySelector('input[type=checkbox]');
+          check.checked = (c.dataset.layerId === layer.id);
+        });
+        draw();
+      };
+      // Speed
+      const slider = card.querySelector('input[data-role="speed"]');
+      const out = card.querySelector('output');
+      slider.oninput = () => {
+        const v = Number(slider.value);
+        out.textContent = v.toFixed(2);
+        layer.parallax = v;  // live edit
+        draw();
+      };
+      // Make layer clickable to set selected layer for Add mode.
+      card.onclick = (e) => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
+        if (state.mode !== 'add') return;
+        state.selectedLayerId = layer.id;
+        document.querySelectorAll('.layer-card').forEach(c => c.classList.toggle('selected', c.dataset.layerId === layer.id));
+      };
+      layersEl.appendChild(card);
+    }
+  }
+
+  // ============ SPRITE LIBRARY ============
+  function buildSpriteLibrary() {
+    spritesEl.innerHTML = '';
+    for (const sprite of state.originalManifest.buildingSprites) {
+      const card = document.createElement('div');
+      card.className = 'sprite-card';
+      card.dataset.spriteId = sprite.id;
+      card.innerHTML = `
+        <div class="preview"><img src="${sprite.file}" alt="${sprite.label}" title="${sprite.label}"></div>
+        <div class="name">${sprite.label}</div>
+      `;
+      card.onclick = () => {
+        document.querySelectorAll('.sprite-card').forEach(c => c.classList.toggle('selected', c === card));
+        state.selectedSprite = { id: sprite.id, width: sprite.width, height: sprite.height };
+        if (state.mode !== 'add') setMode('add');
+        // Default layer for Add mode: pick first layer with buildings in manifest, or first layer.
+        if (!state.selectedLayerId) {
+          const firstWithBuildings = state.originalManifest.layers.find(l => l.buildings && l.buildings.length);
+          state.selectedLayerId = firstWithBuildings ? firstWithBuildings.id : state.originalManifest.layers[0].id;
+          document.querySelectorAll('.layer-card').forEach(c => c.classList.toggle('selected', c.dataset.layerId === state.selectedLayerId));
+        }
+      };
+      spritesEl.appendChild(card);
+    }
+  }
+
+  // ============ MODES ============
+  function setMode(m) {
+    state.mode = m;
+    document.querySelectorAll('#mode-toggle button').forEach(b => b.classList.toggle('active', b.dataset.mode === m));
+    canvas.style.cursor = (m === 'add') ? 'crosshair' : (m === 'edit' ? 'pointer' : 'grab');
+    if (m !== 'edit') clearSelection();
+    // Don't clear selectedLayerId when switching to add — keep the last selected layer for fast placement.
+    if (m === 'view' || m === 'edit') {
+      document.querySelectorAll('.layer-card').forEach(c => c.classList.remove('selected'));
+      if (m !== 'add') state.selectedLayerId = null;
+    }
+    hint.textContent = m === 'view' ? 'Mod: Pregled — scroll, pauza, mijenjaj brzine.'
+                       : m === 'add' ? `Mod: Dodaj — ${state.selectedSprite ? 'klikni na canvas za postavljanje spritea' : 'odaberi sprite iz libraryja'}${state.selectedLayerId ? ' (ciljni sloj: ' + state.selectedLayerId + ')' : ''}`
+                       : 'Mod: Uredi — klikni na zgradu, vuči ili mijenjaj brojeve.';
+    hint.className = '';
+  }
+
+  // ============ CANVAS EVENTS ============
+  let dragBuilding = null;
+
+  function onPointerDown(e) {
+    const { x: worldX, y: worldY } = canvasToWorld(e);
+    if (state.mode === 'add') {
+      if (!state.selectedSprite || !state.selectedLayerId) return;
+      addBuilding(state.selectedLayerId, state.selectedSprite.id, worldX, worldY);
+      draw();
+    } else if (state.mode === 'edit') {
+      const hit = pickBuilding(worldX, worldY);
+      if (hit) {
+        selectBuilding(hit.layerId, hit.index);
+        dragBuilding = { layerId: hit.layerId, index: hit.index, startX: worldX, startY: worldY, origX: hit.b.x, origY: hit.b.y };
+        if (canvas.setPointerCapture) {
+          try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* already released */ }
+        }
+      } else {
+        clearSelection();
+        draw();
+      }
+    } else {
+      // Vue mode: scroll-drag the camera.
+      dragBuilding = { mode: 'camera', startX: e.clientX, cameraX: state.cameraX };
+      if (canvas.setPointerCapture) {
+        try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* already released */ }
+      }
+    }
+  }
+
+  function onPointerMove(e) {
+    if (!dragBuilding) return;
+    if (dragBuilding.mode === 'camera') {
+      state.cameraX = dragBuilding.cameraX - (e.clientX - dragBuilding.startX) * (W / canvas.clientWidth);
+      $('#camera').value = state.cameraX;
+      draw();
+    } else {
+      // Drag building.
+      const { x: worldX, y: worldY } = canvasToWorld(e);
+      const dx = worldX - dragBuilding.startX;
+      const dy = worldY - dragBuilding.startY;
+      const b = getBuilding(dragBuilding.layerId, dragBuilding.index);
+      b.x = Math.round(dragBuilding.origX + dx);
+      b.y = Math.round(dragBuilding.origY + dy);
+      draw();
+    }
+  }
+
+  canvas.addEventListener('pointerdown', onPointerDown);
+  canvas.addEventListener('pointermove', onPointerMove);
+  canvas.addEventListener('pointerup', () => { dragBuilding = null; });
+  canvas.addEventListener('pointercancel', () => { dragBuilding = null; });
+
+  // Fallback for environments without PointerEvent (older browsers, some test harnesses).
+  // We DON'T dispatch a synthetic pointerdown (would double-fire in environments that have both).
+  // Instead we directly invoke the handler.
+  canvas.addEventListener('mousedown', (e) => {
+    if (window.PointerEvent) return;  // browser supports pointer events natively
+    onPointerDown(e);
+  });
+  canvas.addEventListener('mousemove', (e) => {
+    if (window.PointerEvent) return;
+    onPointerMove(e);
+  });
+  canvas.addEventListener('mouseup', (e) => {
+    if (window.PointerEvent) return;
+    if (dragBuilding) dragBuilding = null;
+  });
+
+  canvas.addEventListener('keydown', (e) => {
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (state.selectedBuilding) {
+        deleteBuilding(state.selectedBuilding.layerId, state.selectedBuilding.index);
+        e.preventDefault();
+      }
+    }
+  });
+  // Make canvas focusable so keyboard events fire on it.
+  canvas.tabIndex = 0;
+
+  // Map screen → world (canvas backing) coords.
+  function canvasToWorld(e) {
+    const rect = canvas.getBoundingClientRect();
+    const sx = (e.clientX - rect.left) / rect.width;
+    const sy = (e.clientY - rect.top) / rect.height;
+    return { x: sx * W, y: sy * H };
+  }
+
+  // ============ BUILDINGS ============
+  function getBuildings(layerId) {
+    if (state.buildingOverrides[layerId]) return state.buildingOverrides[layerId];
+    const layer = state.originalManifest.layers.find(l => l.id === layerId);
+    return (layer && layer.buildings) || [];
+  }
+
+  function getBuilding(layerId, index) {
+    return getBuildings(layerId)[index];
+  }
+
+  function addBuilding(layerId, spriteId, worldX, worldY) {
+    const sprite = state.originalManifest.buildingSprites.find(s => s.id === spriteId);
+    if (!sprite) return;
+    const buildings = getBuildings(layerId).slice();
+    const newB = {
+      asset: spriteId,
+      x: Math.round(worldX - sprite.width / 2),
+      y: Math.round(worldY - sprite.height / 2),
+      width: sprite.width,
+      height: sprite.height,
+    };
+    buildings.push(newB);
+    state.buildingOverrides[layerId] = buildings;
+    selectBuilding(layerId, buildings.length - 1);
+    if (!document.querySelector(`.layer-card[data-layer-id="${layerId}"] input[type=checkbox]`).checked) {
+      // auto-enable layer
+      document.querySelector(`.layer-card[data-layer-id="${layerId}"] input[type=checkbox]`).checked = true;
+    }
+  }
+
+  function deleteBuilding(layerId, index) {
+    const buildings = getBuildings(layerId).filter((_, i) => i !== index);
+    state.buildingOverrides[layerId] = buildings;
+    clearSelection();
+    draw();
+  }
+
+  function duplicateBuilding(layerId, index) {
+    const buildings = getBuildings(layerId).slice();
+    const orig = buildings[index];
+    buildings.push({ ...orig, x: orig.x + 20 });
+    state.buildingOverrides[layerId] = buildings;
+    selectBuilding(layerId, buildings.length - 1);
+    draw();
+  }
+
+  function pickBuilding(worldX, worldY) {
+    // Iterate top-down (front-to-back drawn) so front buildings win.
+    for (let i = state.originalManifest.layers.length - 1; i >= 0; i--) {
+      const layer = state.originalManifest.layers[i];
+      if (!layer.buildings) continue;
+      const buildings = getBuildings(layer.id);
+      for (let j = buildings.length - 1; j >= 0; j--) {
+        const b = buildings[j];
+        if (worldX >= b.x && worldX <= b.x + b.width && worldY >= b.y && worldY <= b.y + b.height) {
+          return { layerId: layer.id, index: j, b };
+        }
+      }
+    }
+    return null;
+  }
+
+  function selectBuilding(layerId, index) {
+    state.selectedBuilding = { layerId, index };
+    selectedSection.style.display = 'block';
+    renderSelectionEditor();
+    draw();
+  }
+
+  function clearSelection() {
+    state.selectedBuilding = null;
+    selectedSection.style.display = 'none';
+    draw();
+  }
+
+  function renderSelectionEditor() {
+    if (!state.selectedBuilding) return;
+    const { layerId, index } = state.selectedBuilding;
+    const b = getBuilding(layerId, index);
+    const layer = state.originalManifest.layers.find(l => l.id === layerId);
+    const sprite = state.originalManifest.buildingSprites.find(s => s.id === b.asset);
+    selectedInfo.innerHTML = `
+      <div class="field"><span class="label">Sloj</span><span>${layer.label}</span></div>
+      <div class="field"><span class="label">Sprite</span><span>${sprite ? sprite.label : b.asset}</span></div>
+      <div class="field"><span class="label">x</span><input type="number" data-field="x" value="${b.x}"></div>
+      <div class="field"><span class="label">y</span><input type="number" data-field="y" value="${b.y}"></div>
+      <div class="field"><span class="label">width</span><input type="number" data-field="width" value="${b.width}"></div>
+      <div class="field"><span class="label">height</span><input type="number" data-field="height" value="${b.height}"></div>
+    `;
+    selectedInfo.querySelectorAll('input[data-field]').forEach(input => {
+      input.onchange = () => {
+        b[input.dataset.field] = Number(input.value);
+        draw();
+      };
+    });
+  }
+
+  // ============ DRAW ============
+  function draw() {
+    // Use parallax engine's draw, then overlay editor graphics.
+    // We need a fresh enabled/speeds object each frame because layer speeds live on manifest (mutated above).
+    const enabled = {};
+    const speeds = {};
+    for (const card of layersEl.querySelectorAll('.layer-card')) {
+      const id = card.dataset.layerId;
+      const check = card.querySelector('input[type=checkbox]');
+      enabled[id] = check.checked;
+      const slider = card.querySelector('input[data-role="speed"]');
+      speeds[id] = Number(slider.value);
+    }
+    // Clear.
+    ctx.clearRect(0, 0, W, H);
+    // Draw layers via parallax engine (its draw is self-contained; we monkey-patch by re-using its internal assets list).
+    // Workaround: since parallax.js's draw() reads from its own `assets` (closure), we bypass and draw manually.
+    drawParallaxManually(enabled, speeds);
+    // Overlay: buildings + selection + seamless guide.
+    drawBuildingsOverlay();
+    if (state.showLoop) drawSeamlessOverlay();
+    if (state.selectedBuilding) drawSelectionHandles();
+    status.textContent = `${Math.round(state.cameraX)} px`;
+    updateLoopInfo();
+  }
+
+  function drawParallaxManually(enabled, speeds) {
+    // Mirror parallax.js exactly: use the loaded images from state.parallax internals.
+    // We don't have direct access to its `assets` array, so we re-fetch the layers and reuse images via cache.
+    // Simpler: re-use state.parallax.draw() but pass speeds. The library does support this:
+    state.parallax.draw(ctx, state.cameraX, { enabled, speeds });
+  }
+
+  function drawBuildingsOverlay() {
+    // Compute horizontal offset for each layer (same as parallax draw does).
+    for (const layer of state.originalManifest.layers) {
+      const speed = Number(document.querySelector(`.layer-card[data-layer-id="${layer.id}"] input[data-role="speed"]`).value);
+      const offset = state.cameraX * speed;
+      const first = Math.floor(offset / W);
+      const buildings = getBuildings(layer.id);
+      if (buildings.length === 0) continue;
+      for (let tile = first; tile <= first + 1; tile++) {
+        const tileX = tile * W - offset;
+        // Save for clip — buildings mustn't draw outside the visible 2172-wide canvas.
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, W, H);
+        ctx.clip();
+        for (const b of buildings) {
+          const bx = b.x + tileX;
+          // Sprite lookup
+          const sprite = state.spriteImages ? state.spriteImages[b.asset] : null;
+          if (sprite && sprite.complete) {
+            ctx.drawImage(sprite, bx, b.y, b.width, b.height);
+          } else {
+            // Fallback placeholder if image missing.
+            ctx.fillStyle = 'rgba(255, 200, 100, 0.4)';
+            ctx.fillRect(bx, b.y, b.width, b.height);
+          }
+        }
+        ctx.restore();
+      }
+    }
+  }
+
+  function drawSeamlessOverlay() {
+    // For each parallax layer, compute its seam position and draw the line.
+    // The "true" wraparound happens at the road layer (speed=1), so we use that as ground truth.
+    const speed = 1;  // road layer speed (the "true" camera)
+    const offset = state.cameraX * speed;
+    const first = Math.floor(offset / W);
+    const nextSeamX = (first + 1) * W - offset;
+    // Draw the next seam line. It cycles through positions in [0, W].
+    ctx.save();
+    // Always-visible vertical line at the right edge of current tile.
+    ctx.strokeStyle = 'rgba(233, 196, 106, 0.85)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(nextSeamX, 0);
+    ctx.lineTo(nextSeamX, H);
+    ctx.stroke();
+    // Ghost line on the left edge too (where the previous one wrapped from).
+    if (nextSeamX > 50 && nextSeamX < W - 50) {
+      ctx.strokeStyle = 'rgba(184, 210, 195, 0.5)';
+      ctx.beginPath();
+      ctx.moveTo(nextSeamX - W, 0);
+      ctx.lineTo(nextSeamX - W, H);
+      ctx.stroke();
+    }
+    // Label.
+    ctx.fillStyle = 'rgba(233, 196, 106, 0.95)';
+    ctx.font = '11px ui-monospace, Menlo, monospace';
+    const wrapX = (first + 1) * W;
+    ctx.fillText(`SEAM @ worldX=${wrapX} (canvas X=${nextSeamX.toFixed(0)})`, Math.max(4, Math.min(nextSeamX - 200, W - 200)), 14);
+    ctx.restore();
+  }
+
+  function drawSelectionHandles() {
+    const { layerId, index } = state.selectedBuilding;
+    const speed = Number(document.querySelector(`.layer-card[data-layer-id="${layerId}"] input[data-role="speed"]`).value);
+    const offset = state.cameraX * speed;
+    const first = Math.floor(offset / W);
+    const b = getBuilding(layerId, index);
+    // Draw bbox for visible tiles (handle only current + next).
+    for (let tile = first; tile <= first + 1; tile++) {
+      const tileX = tile * W - offset;
+      const bx = b.x + tileX;
+      // Skip if completely off-canvas.
+      if (bx + b.width < 0 || bx > W) continue;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(233, 196, 106, 0.95)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([]);
+      ctx.strokeRect(bx, b.y, b.width, b.height);
+      // Corner handles.
+      ctx.fillStyle = 'rgba(212, 227, 210, 1)';
+      const corners = [
+        [bx, b.y], [bx + b.width, b.y],
+        [bx, b.y + b.height], [bx + b.width, b.y + b.height],
+      ];
+      for (const [cx, cy] of corners) {
+        ctx.fillRect(cx - 3, cy - 3, 7, 7);
+      }
+      ctx.restore();
+    }
+  }
+
+  function updateLoopInfo() {
+    const offset = state.cameraX * 1;
+    const first = Math.floor(offset / W);
+    const nextSeamX = (first + 1) * W;
+    loopInfo.innerHTML = `Offset = ${offset.toFixed(0)} px · idući šav na <code>cameraX = ${nextSeamX.toFixed(0)}</code>`;
+  }
+
+  // ============ EXPORT ============
+  function exportManifestPatch() {
+    if (Object.keys(state.buildingOverrides).length === 0 && !anySpeedChanged()) {
+      exportArea.value = '// Nema promjena. Dodaj ili pomakni zgradu pa pokušaj opet.';
+      return;
+    }
+    const patch = {
+      _comment: 'Patch diff za manifest.json — samo slojevi s promjenama.',
+    };
+    let hasChanges = false;
+    for (const layer of state.originalManifest.layers) {
+      const origBuildings = layer.buildings || null;
+      const newBuildings = state.buildingOverrides[layer.id] || null;
+      const buildingsChanged = JSON.stringify(origBuildings) !== JSON.stringify(newBuildings);
+      const sliderEl = document.querySelector(`.layer-card[data-layer-id="${layer.id}"] input[data-role="speed"]`);
+      const newSpeed = Number(sliderEl.value);
+      const speedChanged = Math.abs(newSpeed - layer.parallax) > 0.001;
+      if (!buildingsChanged && !speedChanged) continue;
+      // Only include layers with buildings changes if they actually exist (non-null).
+      // This avoids polluting the patch with "buildings: null" entries for layers
+      // the user never touched.
+      if (buildingsChanged && !state.buildingOverrides[layer.id]) continue;
+      hasChanges = true;
+      const entry = { id: layer.id };
+      if (speedChanged) entry.parallax = Number(newSpeed.toFixed(2));
+      if (buildingsChanged && state.buildingOverrides[layer.id]) entry.buildings = state.buildingOverrides[layer.id];
+      patch[layer.id] = entry;
+    }
+    if (!hasChanges) {
+      exportArea.value = '// Nema promjena.';
+      return;
+    }
+    exportArea.value = JSON.stringify(patch, null, 2);
+    exportArea.select();
+  }
+
+  function exportGameSettings() {
+    const speeds = {};
+    for (const card of layersEl.querySelectorAll('.layer-card')) {
+      speeds[card.dataset.layerId] = Number(card.querySelector('input[data-role="speed"]').value);
+    }
+    const code = `// Drop-in za game.js.
+// U konstruktoru Game klase (ili init()):
+//   import { loadParallax } from './assets/00_Materijali/parallax-city/parallax.js';
+//   this.background = await loadParallax('./assets/00_Materijali/parallax-city/');
+//
+// U draw() metodi, prije Player/Collectibles:
+//   this.background.draw(ctx, this.worldX, {
+//     width: ctx.canvas.width,
+//     height: ctx.canvas.height,
+//     speeds: ${JSON.stringify(speeds, null, 2)},
+//   });
+//
+// VAŽNO: parallax.js NE podržava per-layer enable/disable kroz options.
+// Trenutno se svi aktivni slojevi iz manifest.json crtaju.
+// Ako trebaš toggle (npr. skriveni kafić u start ekranu), koristi enabled objekt.`;
+    exportArea.value = code;
+    exportArea.select();
+  }
+
+  function anySpeedChanged() {
+    for (const layer of state.originalManifest.layers) {
+      const sliderEl = document.querySelector(`.layer-card[data-layer-id="${layer.id}"] input[data-role="speed"]`);
+      if (!sliderEl) continue;
+      if (Math.abs(Number(sliderEl.value) - layer.parallax) > 0.001) return true;
+    }
+    return false;
+  }
+
+  // ============ EVENTS ============
+  function wireEvents() {
+    // Mode toggle.
+    document.querySelectorAll('#mode-toggle button').forEach(b => {
+      b.onclick = () => setMode(b.dataset.mode);
+    });
+    // Scale buttons.
+    document.querySelectorAll('#scale-row button').forEach(b => {
+      b.onclick = () => {
+        state.scale = Number(b.dataset.scale);
+        document.querySelectorAll('#scale-row button').forEach(x => x.classList.toggle('active', x === b));
+        applyScale();
+      };
+    });
+    applyScale();
+    // Camera slider.
+    $('#camera').oninput = (e) => {
+      state.playing = false;
+      $('#play').textContent = '▶ Pokreni';
+      state.cameraX = Number(e.target.value);
+      draw();
+    };
+    // Play.
+    $('#play').onclick = () => {
+      state.playing = !state.playing;
+      $('#play').textContent = state.playing ? '⏸ Zaustavi' : '▶ Pokreni';
+    };
+    // Reset.
+    $('#reset').onclick = () => {
+      state.playing = false;
+      $('#play').textContent = '▶ Pokreni';
+      state.cameraX = 0;
+      $('#camera').value = 0;
+      // Reset building overrides.
+      state.buildingOverrides = {};
+      // Reset speeds.
+      for (const card of layersEl.querySelectorAll('.layer-card')) {
+        const id = card.dataset.layerId;
+        const layer = state.originalManifest.layers.find(l => l.id === id);
+        const slider = card.querySelector('input[data-role="speed"]');
+        slider.value = layer.parallax;
+        card.querySelector('output').textContent = layer.parallax.toFixed(2);
+        card.querySelector('input[type=checkbox]').checked = true;
+      }
+      clearSelection();
+      draw();
+    };
+    // All / None.
+    $('#all').onclick = () => {
+      layersEl.querySelectorAll('input[type=checkbox]').forEach(c => c.checked = true);
+      draw();
+    };
+    $('#none').onclick = () => {
+      layersEl.querySelectorAll('input[type=checkbox]').forEach(c => c.checked = false);
+      draw();
+    };
+    $('#solo-active').onclick = () => {
+      // Solo: keep only the layer selected in selectedBuilding (or first layer if none).
+      const targetId = state.selectedBuilding ? state.selectedBuilding.layerId
+                       : (layersEl.querySelector('.layer-card')?.dataset.layerId);
+      if (!targetId) return;
+      layersEl.querySelectorAll('.layer-card').forEach(c => {
+        c.querySelector('input[type=checkbox]').checked = (c.dataset.layerId === targetId);
+      });
+      draw();
+    };
+    // Loop overlay toggle.
+    $('#show-loop').onchange = (e) => {
+      state.showLoop = e.target.checked;
+      draw();
+    };
+    // Export buttons.
+    $('#export-manifest').onclick = exportManifestPatch;
+    $('#export-game').onclick = exportGameSettings;
+    // Selected building buttons.
+    $('#delete-building').onclick = () => {
+      if (state.selectedBuilding) deleteBuilding(state.selectedBuilding.layerId, state.selectedBuilding.index);
+    };
+    $('#duplicate-building').onclick = () => {
+      if (state.selectedBuilding) duplicateBuilding(state.selectedBuilding.layerId, state.selectedBuilding.index);
+    };
+  }
+
+  function applyScale() {
+    // CSS-only scale: keep canvas backing store at 2172x724.
+    // Use max-width so the canvas fits within the stage; width:100% makes it fill available space.
+    canvas.style.maxWidth = `${state.scale * W}px`;
+    canvas.style.width = 'auto';
+  }
+
+  // ============ HASH SYNC ============
+  function applyHash() {
+    const hash = location.hash.replace(/^#/, '');
+    if (!hash) return;
+    const params = new URLSearchParams(hash);
+    if (params.has('scale')) {
+      state.scale = Number(params.get('scale'));
+      document.querySelectorAll('#scale-row button').forEach(b => {
+        b.classList.toggle('active', Number(b.dataset.scale) === state.scale);
+      });
+    }
+    if (params.has('mode')) {
+      setMode(params.get('mode'));
+    }
+    if (params.has('camera')) {
+      state.cameraX = Number(params.get('camera'));
+      $('#camera').value = state.cameraX;
+    }
+  }
+
+  function updateHash() {
+    const params = new URLSearchParams();
+    params.set('scale', state.scale);
+    params.set('mode', state.mode);
+    params.set('camera', Math.round(state.cameraX));
+    history.replaceState(null, '', '#' + params.toString());
+  }
+
+  // ============ ANIMATION LOOP ============
+  function frame(t) {
+    const dt = Math.min((t - state.lastTime) / 1000, 0.06);
+    state.lastTime = t;
+    if (state.playing) {
+      state.cameraX += Number($('#velocity').value) * dt;
+      $('#camera').value = state.cameraX;
+      draw();
+    }
+    updateHash();
+    requestAnimationFrame(frame);
+  }
+
+  // ============ PRELOAD SPRITE IMAGES (for overlay) ============
+  async function preloadSprites() {
+    state.spriteImages = {};
+    for (const sprite of state.originalManifest.buildingSprites) {
+      const img = new Image();
+      img.src = sprite.file;
+      await img.decode().catch(() => {});
+      state.spriteImages[sprite.id] = img;
+    }
+  }
+
+  // ============ START ============
+  boot();
+  requestAnimationFrame(frame);
+</script>
+</main>
+</html>

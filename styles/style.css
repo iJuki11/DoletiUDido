@@ -1,0 +1,713 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --ink: #f5f2e9;
+  --muted: #aeb3b4;
+  --charcoal: #25282b;
+  --panel: rgba(26, 28, 30, 0.82);
+  --gold: #f5b82e;
+  --gold-deep: #d88912;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: #151719;
+}
+
+body {
+  display: grid;
+  place-items: center;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+button {
+  font: inherit;
+}
+
+.game-shell {
+  position: relative;
+  isolation: isolate;
+  width: 100vw;
+  height: 100vh;
+  height: 100svh;
+  overflow: hidden;
+  background: #abb0b1;
+}
+
+#game-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+.hud {
+  position: absolute;
+  z-index: 5;
+  bottom: max(0.7rem, env(safe-area-inset-bottom));
+  left: 0.7rem;
+  right: 0.7rem;
+  display: grid;
+  grid-template-columns: auto 1fr 1fr;
+  align-items: stretch;
+  gap: 0.4rem;
+  pointer-events: none;
+}
+
+.hud-block {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 2.7rem;
+  padding: 0 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.85rem;
+  background: rgba(30, 32, 34, 0.78);
+  box-shadow: 0 0.3rem 0.85rem rgba(0, 0, 0, 0.16);
+  backdrop-filter: blur(8px);
+  color: var(--ink);
+  font-size: 0.95rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  overflow: visible;
+}
+
+.hud-beer,
+.hud-coffee {
+  justify-content: center;
+}
+
+.hud-health {
+  gap: 0.18rem;
+  padding: 0 0.5rem;
+}
+
+.hud[hidden],
+.screen[hidden],
+.touch-prompt[hidden] {
+  display: none;
+}
+
+.pause-overlay[hidden] {
+  display: none;
+}
+
+.pause-overlay {
+  position: absolute;
+  z-index: 8;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink);
+  text-align: center;
+  background: rgba(12, 14, 16, 0.58);
+}
+
+.pause-overlay h2 {
+  margin: 0;
+  font-size: clamp(3rem, 16vw, 5rem);
+}
+
+.pause-overlay p {
+  margin: 1rem 0 0;
+  color: var(--muted);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.poop-indicator {
+  display: flex;
+  align-items: center;
+  gap: .14rem;
+  min-height: 3.25rem;
+  padding: 0 .45rem;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: .9rem;
+  background: rgba(30,32,34,.78);
+}
+.poop-indicator svg { width: 1.1rem; height: 1.1rem; fill: #8f705a; opacity: .35; transition: fill 200ms ease, opacity 200ms ease; }
+.poop-indicator svg.charged { fill: #5d321d; opacity: 1; }
+#coffee-boost { color: #f5b82e; font-size: .7rem; font-weight: 800; white-space: nowrap; }
+
+.hud-score,
+.hud-pill {
+  min-height: 3.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.9rem;
+  background: rgba(30, 32, 34, 0.78);
+  box-shadow: 0 0.35rem 1rem rgba(0, 0, 0, 0.16);
+  backdrop-filter: blur(8px);
+}
+
+.hud-score {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 7.5rem;
+  padding: 0.48rem 0.72rem;
+}
+
+.hud-score span,
+.results span {
+  color: var(--muted);
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.hud-score strong {
+  color: var(--ink);
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.hud-distance strong {
+  color: var(--gold);
+  font-size: 0.78rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.hud-pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.42rem;
+  min-width: 3.65rem;
+  padding: 0 0.7rem;
+  color: var(--ink);
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-health {
+  display: flex;
+  gap: 0.2rem;
+  align-items: center;
+  min-height: 3.25rem;
+  padding: 0 0.55rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.9rem;
+  background: rgba(30, 32, 34, 0.78);
+}
+
+.health-heart {
+  width: 1.05rem;
+  height: 1.05rem;
+  fill: #f06b62;
+  stroke: #ffd6c9;
+  stroke-width: 1.5;
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+
+.health-heart.lost {
+  opacity: 0.12;
+  transform: scale(0.72);
+}
+
+/* Beer mug icon — gold body, white foam head, handle on the right.
+   Sized to match the coffee cup next to it. */
+.beer-icon {
+  position: relative;
+  display: inline-block;
+  width: 1.2rem;
+  height: 1.5rem;
+  border: 0.16rem solid #fff0bd;
+  border-bottom: 0.16rem solid #fff0bd;
+  border-radius: 0.16rem 0.16rem 0.22rem 0.22rem;
+  background: linear-gradient(180deg, #ffd76b 0%, #f5b82e 60%, #d88912 100%);
+  box-shadow: inset 0 0.22rem 0 rgba(255, 255, 255, 0.45),
+              0 0 0.55rem rgba(245, 184, 46, 0.55);
+}
+.beer-icon::before {
+  /* Foam head */
+  content: "";
+  position: absolute;
+  top: -0.14rem;
+  left: -0.06rem;
+  right: -0.06rem;
+  height: 0.4rem;
+  background: #fff7da;
+  border-radius: 0.7rem 0.7rem 0.25rem 0.25rem / 0.7rem 0.7rem 0.25rem 0.25rem;
+}
+.beer-icon::after {
+  /* Handle */
+  content: "";
+  position: absolute;
+  top: 0.36rem;
+  right: -0.52rem;
+  width: 0.4rem;
+  height: 0.62rem;
+  border: 0.16rem solid #fff0bd;
+  border-left: 0;
+  border-radius: 0 0.32rem 0.32rem 0;
+}
+
+/* Coffee cup icon — matches the in-level drawCoffee() style:
+   a cream-white cup with a handle on the right, two steam wisps rising
+   above it, and the same warm gold glow as the beer. Sized to match
+   the beer mug (1.2 × 1.5 rem body). */
+.coffee-icon {
+  position: relative;
+  display: inline-block;
+  width: 1.2rem;
+  height: 1.5rem;
+  border: 0.14rem solid #ffffff;
+  border-radius: 0.22rem 0.22rem 0.32rem 0.32rem;
+  background: #ffffff;
+  /* Same warm gold glow as the beer / in-level coffee collectible. */
+  box-shadow: 0 0 0.55rem rgba(245, 184, 46, 0.55);
+  margin-top: 0.55rem; /* room for steam above */
+}
+
+/* Handle — small ear on the right side. */
+.coffee-icon::after {
+  content: "";
+  position: absolute;
+  top: 0.5rem;
+  right: -0.34rem;
+  width: 0.28rem;
+  height: 0.5rem;
+  border: 0.14rem solid #ffffff;
+  border-left: 0;
+  border-radius: 0 0.28rem 0.28rem 0;
+  background: transparent;
+}
+
+/* Steam — two thin wavy lines rising above the cup, drawn on a child
+   <span> so they can use ::before and ::after independently of the cup. */
+.coffee-steam {
+  position: absolute;
+  left: 50%;
+  top: -0.55rem;
+  width: 1rem;
+  height: 0.6rem;
+  margin-left: -0.5rem;
+  pointer-events: none;
+}
+.coffee-steam::before,
+.coffee-steam::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  width: 0.16rem;
+  height: 0.55rem;
+  border-radius: 0.16rem 0.16rem 0 0;
+  border: 0.1rem solid #ffffff;
+  border-bottom: 0;
+  background: transparent;
+}
+.coffee-steam::before {
+  left: 0.2rem;
+  height: 0.55rem;
+}
+.coffee-steam::after {
+  right: 0.2rem;
+  height: 0.45rem;
+  top: 0.05rem;
+}
+
+.screen {
+  position: absolute;
+  z-index: 10;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: max(2rem, env(safe-area-inset-top)) 1.5rem max(2rem, env(safe-area-inset-bottom));
+  color: var(--ink);
+  text-align: center;
+  background:
+    linear-gradient(180deg, rgba(24, 26, 28, 0.2), rgba(24, 26, 28, 0.78)),
+    repeating-linear-gradient(90deg, transparent 0 46px, rgba(255, 255, 255, 0.022) 47px 48px);
+  backdrop-filter: grayscale(0.8) contrast(1.04);
+}
+
+.screen::before {
+  content: "";
+  position: absolute;
+  inset: 0.85rem;
+  z-index: -1;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 1.25rem;
+  pointer-events: none;
+}
+
+.screen-start {
+  justify-content: flex-end;
+  padding-bottom: max(2.1rem, calc(env(safe-area-inset-bottom) + 1.25rem));
+}
+
+/* Loading screen — shown while parallax PNGs and bird SVG are being fetched
+   and decoded. Just a centered image and two short labels, in the same
+   dark / gold palette as the rest of the game. */
+.screen-loading {
+  z-index: 20; /* above other screens so nothing else bleeds through */
+  justify-content: center;
+  gap: 1.2rem;
+  padding-top: max(2rem, env(safe-area-inset-top));
+  padding-bottom: max(2rem, env(safe-area-inset-bottom));
+}
+
+/* Centered title image — bird.svg is roughly square at its natural size, so
+   we cap it at ~38% of the viewport width on phones and let it scale down
+   on bigger screens. Aspect-ratio is preserved via the natural width/height
+   attributes on the <img>. */
+.loading-image {
+  width: min(38vw, 14rem);
+  height: auto;
+  margin-bottom: 0.6rem;
+}
+
+.loading-line {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: center;
+}
+
+/* Tap-to-continue state. When the parallax + bird SVG have finished
+   loading, ui.showTapToContinue() adds .is-tap to the loading screen.
+   That class:
+     - hides the "loading" line (it has no meaning anymore)
+     - shows the .loading-tap line ("tap")
+     - spawns a ripple ring under the "tap" text (see @keyframes tap-ripple)
+   The bird image stays static — the ripple below the prompt is the only
+   visual cue that the screen is alive and waiting. */
+.screen-loading.is-tap .loading-line:not(.loading-tap) {
+  display: none;
+}
+
+.screen-loading.is-tap .loading-tap {
+  display: block;
+  color: var(--gold);
+  font-size: 1.05rem;
+  position: relative;
+  padding: 0.6rem 1.2rem;
+}
+
+/* Ripple ring — pseudo-element absolutely positioned under the "tap" text.
+   Expands from a small dot to a wide circle while fading out, then
+   restarts. Two ripples with a 0.6 s offset give a continuous "tapping"
+   rhythm. */
+.screen-loading.is-tap .loading-tap::before,
+.screen-loading.is-tap .loading-tap::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0.5rem;
+  height: 0.5rem;
+  border: 2px solid var(--gold);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  animation: tap-ripple 1.4s ease-out infinite;
+  opacity: 0;
+}
+
+.screen-loading.is-tap .loading-tap::after {
+  /* Second ripple — half a cycle offset so a new ring is always on
+     screen. Without it the rhythm feels like a single thump rather
+     than a continuous tap. */
+  animation-delay: 0.7s;
+}
+
+@keyframes tap-ripple {
+  0%   { width: 0.5rem; height: 0.5rem; opacity: 0.8; }
+  100% { width: 5rem;   height: 5rem;   opacity: 0;   }
+}
+
+/* When the screen is fading out before being detached from the DOM tree,
+  give it a short transition so the user doesn't see a hard pop. */
+.screen-loading.is-leaving {
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 320ms ease;
+}
+
+/* Offline / fallback toast — used by Game when the parallax JSON failed to
+   load and we fell back to the procedural scene. Single instance lives
+   inside .game-shell, fades in for ~5 s, then fades out. */
+.offline-toast {
+  position: absolute;
+  z-index: 30;
+  bottom: max(1.2rem, env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%) translateY(0.6rem);
+  padding: 0.7rem 1.1rem;
+  border: 1px solid rgba(245, 184, 46, 0.45);
+  border-radius: 0.7rem;
+  color: var(--ink);
+  background: rgba(31, 33, 35, 0.92);
+  box-shadow: 0 0.6rem 1.6rem rgba(0, 0, 0, 0.32);
+  font-size: 0.85rem;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 260ms ease, transform 260ms ease;
+  white-space: nowrap;
+}
+.offline-toast.is-visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.brand-mark {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 7.2rem;
+  height: 4.5rem;
+  margin-bottom: 1.1rem;
+}
+
+.mug {
+  position: relative;
+  z-index: 2;
+  width: 2.5rem;
+  height: 3.25rem;
+  border: 0.24rem solid #fff1c8;
+  border-radius: 0.35rem 0.35rem 0.6rem 0.6rem;
+  background: linear-gradient(90deg, #e99f16, #ffc846 55%, #e99f16);
+  box-shadow: 0 0.7rem 1.8rem rgba(245, 184, 46, 0.22);
+}
+
+.mug::before {
+  content: "";
+  position: absolute;
+  top: -0.2rem;
+  left: -0.18rem;
+  width: 2.35rem;
+  height: 0.72rem;
+  border-radius: 0.3rem;
+  background: #fff7da;
+  box-shadow: 0.45rem -0.23rem 0 -0.08rem #fff7da;
+}
+
+.mug::after {
+  content: "";
+  position: absolute;
+  top: 0.54rem;
+  right: -1.12rem;
+  width: 0.8rem;
+  height: 1.55rem;
+  border: 0.24rem solid #fff1c8;
+  border-left: 0;
+  border-radius: 0 0.6rem 0.6rem 0;
+}
+
+.wing {
+  width: 2.6rem;
+  height: 1.45rem;
+  border-top: 0.32rem solid #d3d5d2;
+  border-radius: 50%;
+}
+
+.wing-left {
+  transform: rotate(20deg) translateX(0.3rem);
+}
+
+.wing-right {
+  transform: rotate(-20deg) translateX(-0.3rem);
+}
+
+.eyebrow {
+  margin: 0 0 0.65rem;
+  color: var(--gold);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.22em;
+}
+
+h1,
+h2 {
+  margin: 0;
+  color: var(--ink);
+  font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+  font-size: clamp(4.2rem, 22vw, 6.5rem);
+  font-weight: 900;
+  letter-spacing: -0.035em;
+  line-height: 0.78;
+  text-shadow: 0 0.35rem 0 rgba(0, 0, 0, 0.15);
+}
+
+.screen-copy {
+  margin: 1.35rem 0 1.45rem;
+  color: #d2d5d4;
+  font-size: 1rem;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.primary-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: min(100%, 20rem);
+  min-height: 3.8rem;
+  padding: 0 1.2rem;
+  border: 0;
+  border-radius: 0.85rem;
+  color: #211d12;
+  background: var(--gold);
+  box-shadow: 0 0.45rem 0 var(--gold-deep), 0 0.8rem 1.8rem rgba(0, 0, 0, 0.28);
+  font-size: 1rem;
+  font-weight: 950;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
+}
+
+.primary-button:hover {
+  filter: brightness(1.06);
+}
+
+.primary-button:active {
+  transform: translateY(0.22rem);
+  box-shadow: 0 0.23rem 0 var(--gold-deep), 0 0.5rem 1.2rem rgba(0, 0, 0, 0.25);
+}
+
+.primary-button:focus-visible {
+  outline: 0.22rem solid var(--ink);
+  outline-offset: 0.2rem;
+}
+
+.control-hint {
+  margin: 1.05rem 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.control-hint span,
+.control-hint kbd {
+  color: var(--ink);
+}
+
+.control-hint kbd {
+  padding: 0.18rem 0.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 0.3rem;
+  font-family: inherit;
+  font-size: 0.72rem;
+}
+
+.screen-over h2 {
+  font-size: clamp(3.8rem, 19vw, 5.8rem);
+}
+
+.results {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem;
+  width: min(100%, 20rem);
+  margin: 1.6rem 0 1.15rem;
+}
+
+.results > div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-height: 4.6rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.75rem;
+  background: var(--panel);
+  text-align: left;
+}
+
+.results .result-main {
+  grid-column: 1 / -1;
+  min-height: 5.7rem;
+  background: linear-gradient(135deg, rgba(245, 184, 46, 0.18), var(--panel) 70%);
+}
+
+.results strong {
+  margin-top: 0.14rem;
+  color: var(--ink);
+  font-size: 1.55rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.results .result-main strong {
+  color: var(--gold);
+  font-size: 2.35rem;
+}
+
+.touch-prompt {
+  position: absolute;
+  z-index: 6;
+  left: 50%;
+  bottom: max(4.5rem, calc(env(safe-area-inset-bottom) + 3rem));
+  padding: 0.65rem 0.85rem;
+  border-radius: 99px;
+  color: #f1f0eb;
+  background: rgba(31, 33, 35, 0.7);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.13em;
+  transform: translateX(-50%);
+  animation: prompt-pulse 1.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes prompt-pulse {
+  0%, 100% { opacity: 0.48; transform: translateX(-50%) scale(0.97); }
+  50% { opacity: 1; transform: translateX(-50%) scale(1); }
+}
+
+@media (min-width: 700px) {
+  body {
+    padding: 1.5rem;
+    background:
+      radial-gradient(circle at 50% 35%, #3c4042, #151719 68%);
+  }
+
+  .game-shell {
+    width: min(430px, calc((100vh - 3rem) * 0.462));
+    height: min(844px, calc(100vh - 3rem));
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 1.8rem;
+    box-shadow: 0 2rem 6rem rgba(0, 0, 0, 0.48);
+  }
+}
+
+@media (max-height: 660px) {
+  .brand-mark { margin-bottom: 0.55rem; transform: scale(0.8); }
+  .screen-copy { margin: 0.8rem 0 1rem; }
+  .control-hint { margin-top: 0.7rem; }
+  .results { margin: 0.9rem 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
