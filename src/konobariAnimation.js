@@ -37,7 +37,7 @@ export class KonobariAnimation {
   static preload(url = SHEET_URL) { return loadSheet(url); }
 
   constructor(x, y, {
-    scale = 0.8, direction = -1, velocityX = 0,
+    scale = 0.5, direction = -1, velocityX = 0,
     fps = 20, animationSpeed = 1, playing = true,
     sheetUrl = SHEET_URL,
   } = {}) {
@@ -78,15 +78,29 @@ export class KonobariAnimation {
 
   getBounds() {
     // Conservative bounds over the entire animation, including wings and bobbing.
+    // Konobari collider is shrunk to ~55% (35% + extra 15%) of the visible
+    // sprite so the pickup feels fair to the player — the wheels/edges of
+    // the sprite art don't count as contact, only the body area.
     const c = Math.cos(this.rotation), s = Math.sin(this.rotation);
     const points = [[8, 12], [378, 12], [378, 424], [8, 424]].map(([x,y]) => {
       x = (x - ORIGIN.x) * this.scale * -this.direction;
       y = (y - ORIGIN.y) * this.scale;
       return {x: this.x + x*c - y*s, y: this.y + x*s + y*c};
     });
+    const rawLeft = Math.min(...points.map(p => p.x));
+    const rawRight = Math.max(...points.map(p => p.x));
+    const rawTop = Math.min(...points.map(p => p.y));
+    const rawBottom = Math.max(...points.map(p => p.y));
+    // Shrink around the centre by ~45% (× 0.5525).
+    const cx = (rawLeft + rawRight) / 2;
+    const cy = (rawTop + rawBottom) / 2;
+    const halfW = (rawRight - rawLeft) / 2 * 0.5525;
+    const halfH = (rawBottom - rawTop) / 2 * 0.5525;
     return {
-      left: Math.min(...points.map(p => p.x)), right: Math.max(...points.map(p => p.x)),
-      top: Math.min(...points.map(p => p.y)), bottom: Math.max(...points.map(p => p.y)),
+      left: cx - halfW,
+      right: cx + halfW,
+      top: cy - halfH,
+      bottom: cy + halfH,
     };
   }
 
@@ -96,6 +110,44 @@ export class KonobariAnimation {
       const b = this.getBounds();
       if (b.right < viewport.left || b.left > viewport.right ||
           b.bottom < viewport.top || b.top > viewport.bottom) return;
+    }
+    // Ripple efekt IZA sprite-a. Dva koncentrična kruga koji se šire iz
+    // vizualnog centra spritea (anchor je kod kotača — dno spritea — pa
+    // centar izračunavamo kao y - 100, otprilike sredina sprite art-a od
+    // 12..424 visine). Drugi krug kasni pola perioda tako da uvijek
+    // postoji barem jedan aktivni ripple — kontinuirani puls bez pauze.
+    // Nestaje kad je `_pulseHidden` postavljen na true (manager to radi
+    // za vrijeme hit cooldowna). `this.time` se NE incrementava kad je
+    // igra pauzirana (update() se ne poziva), pa ripple prati game state.
+    if (!this._pulseHidden) {
+      const RIPPLE_PERIOD = 1.6; // sekunde po ciklusu
+      const RIPPLE_MIN = 20;
+      const RIPPLE_MAX = 90;
+      const RIPPLE_BASE_ALPHA = 0.45;
+      const phase = (this.time % RIPPLE_PERIOD) / RIPPLE_PERIOD; // 0..1
+      // Centar: x = sprite anchor, y = malo niže od vizualnog centra
+      // (anchor je kod kotača, pa centar je y - 70, između sredine i
+      // donje trećine spritea).
+      const cx = this.x;
+      const cy = this.y - 70;
+
+      ctx.save();
+      ctx.strokeStyle = "#7dff9a";
+      ctx.lineWidth = 2;
+      ctx.shadowColor = "#22ff66";
+      ctx.shadowBlur = 8;
+
+      for (let i = 0; i < 2; i++) {
+        const localPhase = (phase + i * 0.5) % 1; // drugi kasni 0.5
+        const radius = RIPPLE_MIN + (RIPPLE_MAX - RIPPLE_MIN) * localPhase;
+        const alpha = (1 - localPhase) * RIPPLE_BASE_ALPHA;
+        if (alpha <= 0.01) continue;
+        ctx.globalAlpha = alpha;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
     }
     const sx = this.frame % COLUMNS * FRAME_WIDTH;
     const sy = Math.floor(this.frame / COLUMNS) * FRAME_HEIGHT;

@@ -3,6 +3,14 @@
 // spawner_airplane.js) read from this module instead of hard-coding their
 // own intervals — that way a future "4-line override" only needs to
 // touch one file.
+
+// Konobari friendly NPC — visual + collision footprint. Slot grid je
+// baziran na VISIBLE_HEIGHT (Y spacing); VISIBLE_WIDTH koristi se kao
+// safety buffer u spawn margin izračunu. GRID_SLOTS_Y mora biti ISTI
+// kao spawner_enemybird.js (ptice) za vizualnu konzistentnost.
+export const KONOBARI_VISIBLE_HEIGHT = 80;
+export const KONOBARI_VISIBLE_WIDTH = 80;
+export const KONOBARI_GRID_SLOTS_Y = 6;
 //
 // The current level is computed from the player's lifetime collectibles
 // count (beers + coffees). Once `hasEnteredHard` is true it stays true
@@ -42,6 +50,16 @@ export const DIFFICULTY_LEVELS = Object.freeze({
     airplaneIntervalMin: Infinity,
     airplaneIntervalMax: Infinity,
     airplaneDamage: 2,
+    // Konobari friendly NPC — tuned per difficulty. Scale i hit cooldown
+    // su isti za sve levele (nema razloga varirati); interval i speed se
+    // lagano povećavaju s težinom.
+    konobariEnabled: true,
+    konobariIntervalMin: 12,
+    konobariIntervalMax: 22,
+    konobariMinSpeed: 80,
+    konobariMaxSpeed: 140,
+    konobariScale: 0.35,
+    konobariHitCooldown: 2.5,
   }),
   [DIFFICULTY.MEDIUM]: Object.freeze({
     birdIntervalMin: 6,
@@ -49,9 +67,16 @@ export const DIFFICULTY_LEVELS = Object.freeze({
     birdMinSize: 2,
     birdMaxSize: 4,
     airplaneEnabled: true,
-    airplaneIntervalMin: 8,
-    airplaneIntervalMax: 15,
+    airplaneIntervalMin: 5,
+    airplaneIntervalMax: 12,
     airplaneDamage: 2,
+    konobariEnabled: true,
+    konobariIntervalMin: 14,
+    konobariIntervalMax: 24,
+    konobariMinSpeed: 90,
+    konobariMaxSpeed: 160,
+    konobariScale: 0.35,
+    konobariHitCooldown: 2.5,
   }),
   [DIFFICULTY.HARD]: Object.freeze({
     birdIntervalMin: 5,
@@ -59,9 +84,16 @@ export const DIFFICULTY_LEVELS = Object.freeze({
     birdMinSize: 3,
     birdMaxSize: 5,
     airplaneEnabled: true,
-    airplaneIntervalMin: 8,
-    airplaneIntervalMax: 11,
+    airplaneIntervalMin: 4,
+    airplaneIntervalMax: 7,
     airplaneDamage: 2,
+    konobariEnabled: true,
+    konobariIntervalMin: 16,
+    konobariIntervalMax: 28,
+    konobariMinSpeed: 100,
+    konobariMaxSpeed: 180,
+    konobariScale: 0.35,
+    konobariHitCooldown: 2.5,
   }),
 });
 

@@ -16,6 +16,10 @@ function star(ctx, x, y, outer, inner, points, rotation = 0) {
 }
 
 export const COLLISION_EFFECT_DURATION = 0.65;
+// Heal floater ("+1") — green floating text spawned by the konobari pickup.
+// Independent of impact effects so the visual language stays distinct:
+// smoke puffs = damage, green "+1" = heal.
+export const HEAL_FLOATER_DURATION = 1.2;
 
 /** Canvas-only impact effects. No images, dependencies or health mutations. */
 export class CollisionEffects {
@@ -39,6 +43,25 @@ export class CollisionEffects {
     return hit;
   }
 
+  /**
+   * Spawn a green "+1" heal floater at the given world-space coordinates.
+   * Rises ~32 px and fades out over HEAL_FLOATER_DURATION seconds.
+   * FIFO eviction (oldest first) keeps the effects buffer bounded.
+   * Independent of `trigger()` so heal and damage visuals coexist.
+   */
+  spawnHealFloater(x, y) {
+    if (this.effects.length >= this.maxEffects) {
+      const removed = this.effects.shift();
+      removed.age = removed.duration;
+    }
+    this.effects.push({
+      type: "healFloater",
+      x, y,
+      age: 0,
+      duration: HEAL_FLOATER_DURATION,
+    });
+  }
+
   update(deltaTime) {
     if (!Number.isFinite(deltaTime) || deltaTime <= 0) return;
     for (const hit of this.effects) hit.age = Math.min(hit.duration, hit.age + deltaTime);
@@ -51,7 +74,42 @@ export class CollisionEffects {
   }
 
   draw(ctx) {
-    for (const hit of this.effects) this.drawHit(ctx, hit);
+    for (const fx of this.effects) {
+      if (fx.type === "healFloater") this.drawHealFloater(ctx, fx);
+      else this.drawHit(ctx, fx);
+    }
+  }
+
+  /**
+   * Green "+1" rising text. Two layers: a wide, blurred halo (low alpha,
+   * shadowBlur 14) and a sharp bright-green foreground on top. easeOut
+   * on the rise + alpha fade so it slows as it disappears.
+   */
+  drawHealFloater(ctx, fx) {
+    const t = clamp(fx.age / fx.duration);   // 0..1
+    const rise = -32 * easeOut(t);            // pixels up
+    const alpha = 1 - easeOut(t);             // 1 → 0
+    const px = fx.x;
+    const py = fx.y + rise;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.font = "bold 28px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    // Layer 1: blur halo — wide shadow, low-alpha green fill.
+    ctx.shadowColor = "#22ff66";
+    ctx.shadowBlur = 14;
+    ctx.fillStyle = "rgba(40, 220, 80, 0.35)";
+    ctx.fillText("+1", px, py);
+
+    // Layer 2: crisp foreground — no shadow, brighter green.
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "#7dff9a";
+    ctx.fillText("+1", px, py);
+
+    ctx.restore();
   }
 
   drawHit(ctx, hit) {

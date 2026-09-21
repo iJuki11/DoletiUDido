@@ -15,6 +15,13 @@ import { NPCPrsan } from "./npc_prsan.js";
 import { NPCNidjo } from "./npc_nidjo.js";
 import { NPCToni } from "./npc_toni.js";
 import { NPCKonobari } from "./npc_konobari.js";
+import {
+  DIFFICULTY,
+  getLevelConfig,
+  rollInterval,
+  KONOBARI_VISIBLE_HEIGHT,
+  KONOBARI_GRID_SLOTS_Y,
+} from "./difficulty_system.js";
 
 /**
  * Sub-manager for the "prsan" paratrooper NPC.
@@ -385,36 +392,36 @@ export class NPCToniManager {
 
 /**
  * Sub-manager for the "konobari" friendly NPC. Spawns a sprite-sheet
- * character anywhere on the screen (uniform random y) and walks it
- * across the screen. On player overlap it grants +1 HP and is removed.
+ * character off the right edge of the screen on a discrete Y-slot grid
+ * (6 slots, same as enemy birds for visual consistency) and walks it
+ * left across the screen. On player overlap it grants +1 HP via the
+ * onPlayerHit callback — but the instance stays alive and keeps walking;
+ * a per-instance cooldown (`_hitCooldownRemaining`, length from
+ * difficulty_system.konobariHitCooldown) prevents repeated heals from a
+ * single NPC within a short window.
  *
- * Lifetime: at most one konobari on screen. Direction (+1/-1) is randomised
- * on every spawn; speed is randomised in [minSpeed, maxSpeed].
+ * Direction is fixed at -1 (right→left). Speed, scale and interval are
+ * driven by the active `levelConfig` (passed in via `reset()` from the
+ * outer Game), not local constants — so future tuning only touches
+ * `difficulty_system.js`.
  *
  * Despawn uses getBounds() so the sprite vanishes only after its full AABB
  * has cleared the nearest edge (same standard as NPCNidjoManager /
  * NPCToniManager after their despawn-margin fix).
  *
- * `onPlayerHit` is the integration seam — wired by game.js to apply the
- * +1 HP and refresh the HUD, keeping this manager free of player/HUD
- * concerns.
+ * `onPlayerHit(x, y)` is the integration seam — wired by game.js to apply
+ * the +1 HP, refresh the HUD, and spawn the green "+1" heal floater.
  */
 export class NPCKonobariManager {
   constructor({
-    minInterval = 12,
-    maxInterval = 22,
     spawnMargin = 120,
-    minSpeed = 90,
-    maxSpeed = 150,
     onPlayerHit = null,
+    levelConfig = getLevelConfig(DIFFICULTY.EASY),
   } = {}) {
-    this.minInterval = minInterval;
-    this.maxInterval = maxInterval;
     this.spawnMargin = spawnMargin;
-    this.minSpeed = minSpeed;
-    this.maxSpeed = maxSpeed;
     // Optional callback invoked the moment a player overlap is accepted.
     this.onPlayerHit = typeof onPlayerHit === "function" ? onPlayerHit : null;
+    this.levelConfig = levelConfig;
 
     this.instances = [];
     this.scheduleNext();
@@ -422,29 +429,54 @@ export class NPCKonobariManager {
 
   /** Roll a random duration until the next spawn attempt. */
   scheduleNext() {
-    const span = Math.max(0, this.maxInterval - this.minInterval);
-    this.nextSpawn = this.minInterval + Math.random() * span;
+    if (!this.levelConfig?.konobariEnabled) {
+      this.nextSpawn = Infinity;
+      return;
+    }
+    this.nextSpawn = rollInterval(
+      this.levelConfig.konobariIntervalMin,
+      this.levelConfig.konobariIntervalMax,
+    );
   }
 
   /**
-   * Create one konobari instance: randomised direction (left or right),
-   * random forward speed, drawn anywhere across the canvas y-axis.
+   * Y slot → world Y position. Slot height = KONOBARI_VISIBLE_HEIGHT so
+   * adjacent slots never overlap; leftover vertical space becomes extra
+   * top/bottom margin (centred). Same shape as BirdManager.slotY().
+   */
+  slotY(slotIndex, height) {
+    const slotHeight = KONOBARI_VISIBLE_HEIGHT;
+    const gridHeight = slotHeight * KONOBARI_GRID_SLOTS_Y;
+    const leftover = Math.max(
+      0,
+      height - gridHeight - KONOBARI_VISIBLE_HEIGHT - KONOBARI_VISIBLE_HEIGHT,
+    );
+    const top = KONOBARI_VISIBLE_HEIGHT + leftover / 2;
+    return top + (slotIndex + 0.5) * slotHeight;
+  }
+
+  /** Uniform random pick of one of the 6 Y-slots. */
+  pickSlot() {
+    return Math.floor(Math.random() * KONOBARI_GRID_SLOTS_Y);
+  }
+
+  /**
+   * Create one konobari instance: fixed direction (right→left), random
+   * forward speed in [minSpeed, maxSpeed] from the active levelConfig.
+   * Spawn x is always off the right edge; y comes from the slot grid.
    * Returns the new instance so callers (tests, debug overlays) can grab it.
    */
   spawnOne(width, height) {
-    const scale = 0.5;
-    // -1 or +1 with equal probability — alternating traffic both ways.
-    const direction = Math.random() < 0.5 ? -1 : 1;
-    const speed = this.minSpeed + Math.random() * (this.maxSpeed - this.minSpeed);
-    // Spawn just off the appropriate edge with a small margin so the
-    // sprite doesn't pop into existence fully on-screen.
-    const x = direction > 0
-      ? -this.spawnMargin
-      : width + this.spawnMargin;
-    // Uniform random y anywhere on the canvas — the sprite's anchor sits
-    // there directly (KonobariAnimation handles its own bobbing via the
-    // sprite-sheet frames, so no extra y-offset is needed).
-    const y = Math.random() * Math.max(1, height);
+    const scale = this.levelConfig?.konobariScale ?? 0.325;
+    const direction = -1; // fixed: right→left
+    const speed = rollInterval(
+      this.levelConfig.konobariMinSpeed,
+      this.levelConfig.konobariMaxSpeed,
+    );
+    // Always spawn off the RIGHT edge so the sprite doesn't pop into
+    // existence fully on-screen (the slot grid only sets Y).
+    const x = width + this.spawnMargin;
+    const y = this.slotY(this.pickSlot(), height);
 
     const konobar = new NPCKonobari(x, y, {
       scale,
@@ -468,9 +500,17 @@ export class NPCKonobariManager {
       this.spawnOne(width, height);
     }
 
-    // Step every instance, drop stragglers, then check player overlap.
+    // Step every instance, then count down per-instance hit cooldowns.
+    // Cooldown is independent of motion: the instance keeps walking even
+    // while the cooldown is active (we don't pause it).
     for (const konobar of this.instances) {
       konobar.update(deltaTime);
+      if (konobar._hitCooldownRemaining > 0) {
+        konobar._hitCooldownRemaining = Math.max(
+          0,
+          konobar._hitCooldownRemaining - deltaTime,
+        );
+      }
     }
     this.despawnIfOffscreen(width);
     this.checkPlayerOverlap(player);
@@ -487,17 +527,22 @@ export class NPCKonobariManager {
   }
 
   /**
-   * If the player AABB overlaps any active konobari, fire the
-   * onPlayerHit callback and remove that instance (consumed on touch).
-   * Player invincibility does not gate pickups — granting +1 HP is always
-   * welcome — but we still guard against double-fires within a single
-   * frame via the despawn-on-hit rule.
+   * If the player AABB overlaps any active konobari that's NOT in
+   * cooldown, fire the onPlayerHit callback (x, y) and arm the per-
+   * instance cooldown. The instance STAYS in `this.instances` — it does
+   * not despawn on pickup. A second overlap during the cooldown window
+   * is silently ignored (prevents +1 HP spam while the player stays
+   * inside the AABB). Player invincibility does not gate pickups — granting
+   * +1 HP is always welcome.
    */
   checkPlayerOverlap(player) {
     if (!player || typeof player.getBounds !== "function") return;
     const playerBounds = player.getBounds();
     if (!playerBounds) return;
-    this.instances = this.instances.filter((konobar) => {
+    const hitCooldown = this.levelConfig?.konobariHitCooldown ?? 2.5;
+
+    for (const konobar of this.instances) {
+      if (konobar._hitCooldownRemaining > 0) continue;
       const b = konobar.getBounds();
       const overlaps = !(
         b.right < playerBounds.left ||
@@ -507,12 +552,21 @@ export class NPCKonobariManager {
       );
       if (overlaps) {
         // Fire the callback once for the consumed instance; game.js wires
-        // this to player.grantHealth(1) + HUD refresh.
+        // this to player.grantHealth(1) + HUD refresh + heal floater.
         this.onPlayerHit?.(konobar.x, konobar.y);
-        return false; // remove from instances
+        konobar._hitCooldownRemaining = hitCooldown;
+        // Trajno sakrij ripple za ovu instancu — konobar je "potrošen"
+        // (heal je isporučen). Vraća se tek kad nova instanca bude
+        // spawnana. Konobar i dalje hoda, ali ga igrač vizualno više ne
+        // doživljava kao aktivan pickup.
+        // BITNO: postavi na OBJE reference — NPCKonobari wrapper I
+        // KonobariAnimation (koja crta u draw()). Bez ovoga draw()
+        // ne vidi flag jer čita na animation instanci.
+        konobar._pulseHidden = true;
+        if (konobar.animation) konobar.animation._pulseHidden = true;
+        // Note: do NOT remove the instance — it keeps walking.
       }
-      return true;
-    });
+    }
   }
 
   /** Render every active instance via its own draw method. */
@@ -520,12 +574,34 @@ export class NPCKonobariManager {
     for (const konobar of this.instances) {
       konobar.draw(context);
     }
+    // Debug collider overlay — only when window.__DEBUG_KONOBARI_BOXES
+    // is explicitly set to true (e.g. from the DevTools console). Off by
+    // default so it costs nothing in normal play.
+    if (typeof window !== "undefined" && window.__DEBUG_KONOBARI_BOXES === true) {
+      for (const konobar of this.instances) {
+        const b = konobar.getBounds();
+        context.save();
+        context.strokeStyle = "#00ff66";
+        context.lineWidth = 2;
+        context.setLineDash([4, 4]);
+        context.strokeRect(b.left, b.top, b.right - b.left, b.bottom - b.top);
+        context.fillStyle = "#00ff66";
+        context.font = "12px monospace";
+        context.fillText(
+          `scale=${konobar.scale.toFixed(3)} cd=${(konobar._hitCooldownRemaining ?? 0).toFixed(2)}`,
+          b.left,
+          b.top - 4,
+        );
+        context.restore();
+      }
+    }
   }
 
   /** Wipe all instances and reset timers — called on game restart. */
-  reset() {
+  reset(levelConfig = getLevelConfig(DIFFICULTY.EASY)) {
     this.instances = [];
     this.timer = 0;
+    this.levelConfig = levelConfig;
     this.scheduleNext();
   }
 }

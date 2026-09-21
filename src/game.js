@@ -133,11 +133,15 @@ export class Game {
       },
     });
     this.npcManager = new NPCManager({
-      // Konobari pickup: +1 HP, capped by Player.MAX_HP. Visual feedback is
-      // intentionally silent per the design brief — only the HUD heart icon
-      // updates, picked up by ui.update() reading the new player.hp.
-      onPlayerHit: () => {
+      // Konobari pickup: +1 HP, capped by Player.MAX_HP. The (x, y) world-
+      // space coordinates of the NPC are forwarded into the heal floater so
+      // the "+1" text appears above the right sprite. HUD heart refresh is
+      // picked up by ui.update() reading the new player.hp.
+      onPlayerHit: (x, y) => {
         this.player.grantHealth(1);
+        // Anchor the floater 40 px above the konobar body so the text
+        // reads as "from the sprite" rather than overlapping the wheels.
+        this.collisionEffects.spawnHealFloater(x, y - 40);
         this.ui.update(this.snapshot());
       },
     });
@@ -299,7 +303,7 @@ export class Game {
     const levelConfig = this.getLevelConfig();
     this.airplaneManager.reset(levelConfig);
     this.birdManager.reset(levelConfig);
-    this.npcManager.reset();
+    this.npcManager.reset(levelConfig);
     // Reset in place rather than re-instantiating: managers (AirplaneManager)
     // already hold a reference to `player` from the constructor, and
     // swapping `this.player` to a fresh instance would orphan that
