@@ -257,10 +257,9 @@ export class BirdManager {
     // 5th bird repeats a random earlier offset (per "opcija β" — the
     // 5th shares with one of the first four).
     const xOffsets = this.pickXOffsets(formationSize);
-    // PERF-DIAG #6 — spawn marker. One stamp per formation (not per
-    // bird) because the formation is one logical spawn event. See the
-    // [spawn] prsan comment in npc_manager.js for the correlator story.
-    console.log(`[spawn] bird×${formationSize} t=${performance.now().toFixed(1)}`);
+    // PERF-DIAG removed — game.js _spawnLog already records every spawn
+    // (it samples manager.instance arrays around this update call) so
+    // a duplicate console.log here was pure noise.
 
     // Build each bird instance from its slot + X offset.
     for (let i = 0; i < formationSize; i++) {
@@ -294,14 +293,17 @@ export class BirdManager {
     // Bell-curve update later in update() ramps volume based on the lead
     // bird's x.
     this.audio?.startBird?.("bird");
-    // eslint-disable-next-line no-console
-    console.log("[bird] formation spawned", {
-      size: formationSize,
-      slots,
-      xOffsets,
-      speed: speed.toFixed(0),
-      recipe: key,
-    });
+    // Heavy debug payload — full object literal every formation. Only log
+    // when explicitly opted in via __game.debug.bird = true.
+    if (globalThis.__game?.debug?.bird) {
+      console.log("[bird] formation spawned", {
+        size: formationSize,
+        slots,
+        xOffsets,
+        speed: speed.toFixed(0),
+        recipe: key,
+      });
+    }
     return true;
   }
 
@@ -356,8 +358,9 @@ export class BirdManager {
           this.player?.takeDamage?.(entry.config.damage ?? 1);
           entry.damageCooldown = 0.6;
           this.onPlayerHit?.(entry.bird.x, entry.bird.y, entry.config);
-          // eslint-disable-next-line no-console
-          console.log("[bird] hit player, damage=", entry.config.damage ?? 1);
+          if (globalThis.__game?.debug?.bird) {
+            console.log("[bird] hit player, damage=", entry.config.damage ?? 1);
+          }
         }
       }
     }

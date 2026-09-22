@@ -16,7 +16,15 @@ function loadHead(url) {
   if (!headImages.has(url)) {
     headImages.set(url, new Promise((resolve, reject) => {
       const image = new Image();
-      image.onload = () => resolve(image);
+      // PERF-FIX — explicit decode() so the bitmap is rasterised before
+      // the first drawImage(). Combined with the AssetLoader prewarm
+      // (nidjo-head key) the first NPC spawn no longer stalls.
+      image.onload = async () => {
+        if (image.decode) {
+          try { await image.decode(); } catch (_) { /* swallow */ }
+        }
+        resolve(image);
+      };
       image.onerror = () => reject(new Error(`Nije moguće učitati PNG glavu: ${url}`));
       image.src = url;
     }).catch((error) => {

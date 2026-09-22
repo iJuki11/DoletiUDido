@@ -8,7 +8,16 @@ function loadHead() {
   if (!sharedHead) {
     sharedHead = new Promise((resolve, reject) => {
       const image = new Image();
-      image.onload = () => resolve(image);
+      // PERF-FIX — explicit decode() so the bitmap is rasterised before
+      // the first drawImage(). The airplane head is already preloaded via
+      // AssetLoader (airplane-head key) which awaits decode() too, so by
+      // the time this resolves the bitmap is already GPU-ready.
+      image.onload = async () => {
+        if (image.decode) {
+          try { await image.decode(); } catch (_) { /* swallow */ }
+        }
+        resolve(image);
+      };
       image.onerror = () => reject(new Error('Nije moguće učitati assets/images/prsan-head.png'));
       image.src = HEAD_URL;
     }).catch((error) => {

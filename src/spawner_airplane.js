@@ -103,8 +103,8 @@ export class AirplaneManager {
       direction: -1,
       velocityX: -speed,
     });
-    // PERF-DIAG #6 — spawn marker. See [spawn] prsan in npc_manager.js.
-    console.log(`[spawn] airplane recipe=${key} t=${performance.now().toFixed(1)}`);
+    // PERF-DIAG removed — game.js _spawnLog records the spawn; this
+    // console.log was a duplicate.
     this.instances.push({
       enemy,
       recipeKey: key,
@@ -118,8 +118,9 @@ export class AirplaneManager {
     // Kick off the looping airplane SFX — volume is updated every frame in
     // update() based on distance from the centre of the screen.
     this.audio?.startAirplane?.("airplane");
-    // eslint-disable-next-line no-console
-    console.log("[prsan] spawned", { x: enemy.x, y, recipe: key, speed: speed.toFixed(0) });
+    if (globalThis.__game?.debug?.npc) {
+      console.log("[airplane] spawned", { x: enemy.x, y, recipe: key, speed: speed.toFixed(0) });
+    }
   }
 
   update(deltaTime, width, height, player, levelConfig = getLevelConfig(DIFFICULTY.EASY)) {
@@ -179,8 +180,9 @@ export class AirplaneManager {
         // Fire the gameplay-side callback: visual effect, sound, and
         // the 2-second player invincibility window live there.
         this.onPlayerHit?.(entry.enemy.x, entry.enemy.y, entry.config);
-        // eslint-disable-next-line no-console
-        console.log("[prsan] hit player, damage=", entry.damage ?? 2);
+        if (globalThis.__game?.debug?.npc) {
+          console.log("[airplane] hit player, damage=", entry.damage ?? 2);
+        }
       }
     }
   }

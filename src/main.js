@@ -63,20 +63,23 @@ window.addEventListener("keydown", dismissTapScreen, { once: true });
     console.error("[main] whenReady rejected unexpectedly:", error);
   }
 
-  // PERF-FIX #2 — GPU cache pre-warm. Runs while the loading screen is
-  // up so we eat the texture-upload hitch now and not during the first
-  // frame of gameplay. Single 2s timeout (Promise.race) — warmUpRender
-  // itself never rejects, so the timer only exists in this scope. If
-  // the warm-up exceeds 2s we move on; the worst case is the original
-  // hitch, no regression.
+  // PERF-FIX — full warm-up before the loading overlay releases. We
+  // explicitly await the warm-up (no 2s race timeout) so the loading
+  // screen stays up until the GPU upload / decode work is done.
+  // warmUpRender() never rejects; failures are caught internally and
+  // logged, so gameplay is never blocked by a missing asset.
   try {
-    await Promise.race([
-      game.warmUpRender(),
-      new Promise((resolve) => setTimeout(resolve, 2000)),
-    ]);
+    await game.warmUpRender();
   } catch (e) {
     console.warn("[main] warmup threw unexpectedly:", e);
   }
+
+  // Expose the game + a debug switch so the console cheatsheet stays
+  // consistent with the older build. Spawner logs are now gated behind
+  // `__game.debug.bird` / `__game.debug.npc` / `__game.debug.parallax`
+  // and default to off in production.
+  globalThis.__game = game;
+  globalThis.__game.debug = { bird: false, npc: false, parallax: false };
 
   // Optional: log the elapsed load time in the console so we can see at a
   // glance whether warm-cache skipping helped. Useful while we're tuning.

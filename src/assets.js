@@ -16,7 +16,19 @@ export class AssetLoader {
         this.pending.delete(id);
         resolve(image);
       };
-      image.onload = finish;
+      // PERF-FIX — await image.decode() when supported so the bitmap is
+      // fully decoded AND uploaded to the GPU cache before callers draw
+      // it. Without this the first drawImage() of a fresh asset stalls
+      // 50-150 ms mid-gameplay while the browser finishes decoding.
+      // decode() is supported in every evergreen browser; on the rare
+      // Safari oddity where it rejects with an already-decodable image
+      // we fall through to resolve normally.
+      image.onload = async () => {
+        if (image.decode) {
+          try { await image.decode(); } catch (_) { /* swallow */ }
+        }
+        finish();
+      };
       image.onerror = finish;
       image.src = src;
     });
@@ -120,7 +132,14 @@ export class AssetLoader {
           const dataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(serialized)}`;
 
           const img = new Image();
-          img.onload = () => {
+          img.onload = async () => {
+            // PERF-FIX — SVG-rasterised data URLs also need explicit
+            // decode() to avoid the first-draw stall. onload fires when
+            // the browser has parsed the SVG; decode() waits for the
+            // bitmap rasterization to finish.
+            if (img.decode) {
+              try { await img.decode(); } catch (_) { /* swallow */ }
+            }
             this.cache.set(`${cacheKey}#${partId}`, img);
             parts[partId] = img;
             resolvePart(img);
@@ -164,6 +183,11 @@ export class AssetLoader {
     // any URL form works. For everything else the relative path matches
     // what the spawners already use.
     const airplaneUrl = new URL('../assets/images/cvrka.png', import.meta.url).href;
+    // PERF-FIX — explicit PNG head URLs for the three NPC sprites. Each
+    // NPC class (Prsan / Nidjo / Toni) loads its own head image lazily on
+    // first draw, which is exactly the first-use hitch we want to
+    // eliminate. We resolve them here so the per-instance Promise chain
+    // sees an already-cached, fully-decoded image.
     const jobs = [
       this.loadImage('airplane-head', airplaneUrl),
       this.loadSvgParts('./assets/images/enemy_bird.svg', [
@@ -185,7 +209,7 @@ export class AssetLoader {
       }
       const failed = results.filter((r) => r === null).length;
       const suffix = failed > 0 ? ` (${failed} failed)` : '';
-      console.log(`[assets] prewarmEntities done in ${elapsed.toFixed(0)}ms (${imageCount} images)${suffix}`);
+      console.info(`[assets] prewarmEntities done in ${elapsed.toFixed(0)}ms (${imageCount} images)${suffix}`);
     });
   }
 }

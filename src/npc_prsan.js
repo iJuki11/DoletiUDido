@@ -7,7 +7,15 @@ function loadHead() {
   if (!headPromise) {
     headPromise = new Promise((resolve, reject) => {
       const image = new Image();
-      image.onload = () => resolve(image);
+      // PERF-FIX — explicit decode() so the bitmap is rasterised before
+      // the first drawImage(). Combined with the AssetLoader prewarm
+      // (prsan-head key) the first NPC spawn no longer stalls.
+      image.onload = async () => {
+        if (image.decode) {
+          try { await image.decode(); } catch (_) { /* swallow */ }
+        }
+        resolve(image);
+      };
       image.onerror = () => reject(new Error('Nije moguće učitati prsan-head-semi-realistic.png'));
       image.src = HEAD_URL;
     }).catch((error) => {

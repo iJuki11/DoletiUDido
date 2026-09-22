@@ -41,6 +41,10 @@ export class Game {
     // GameUI.updateProgress() so the loading screen shows real progress.
     this.onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
     this.state = STATE.START;
+    // PERF-FIX — debug switch bag. main.js exposes this on globalThis so
+    // console-driven toggling works the same as before, but every gated
+    // log defaults to OFF in production (no per-frame console noise).
+    this.debug = { parallax: false };
     this.width = 0;
     this.height = 0;
     this.pixelRatio = 1;
@@ -465,6 +469,19 @@ export class Game {
       return;
     }
 
+    // PAUSE-FIX — while paused, only the absolute minimum work runs each
+    // tick. No update() (NPCs / spawn timers / collectibles stay frozen),
+    // no draw() (no parallax / entity / player / vignette render), no
+    // perf-overhead bookkeeping (no _frameSamples push, no drawPerfOverlay,
+    // no worst-1s log). The rAF loop continues so resume() can re-arm
+    // gameplay timing cleanly without a separate start path; the per-frame
+    // cost in this branch is just one state read + one rAF schedule.
+    if (this.state !== STATE.PLAYING) {
+      this.lastTime = timestamp;
+      requestAnimationFrame(this.frame);
+      return;
+    }
+
     const updateStartMs = performance.now();
     this.update(deltaTime);
     const updateMs = performance.now() - updateStartMs;
@@ -517,10 +534,13 @@ export class Game {
     //       a few spikes — that's pattern (a).
     // Logged at INFO (not warn) so it doesn't drown the worst-of-N
     // line. Sampled only on parallax spikes, max once per second.
-    if (steps.parallax > 30 && this._parallaxSpikeLogTimer == null) {
+    // Production default OFF — only fires when __game.debug.parallax=true.
+    if (!this.debug?.parallax) {
+      this._parallaxSpikeLogTimer = null;
+    } else if (steps.parallax > 30 && this._parallaxSpikeLogTimer == null) {
       this._parallaxSpikeLogTimer = 0;
     }
-    if (this._parallaxSpikeLogTimer != null) {
+    if (this.debug?.parallax && this._parallaxSpikeLogTimer != null) {
       this._parallaxSpikeLogTimer += deltaTime;
       if (this._parallaxSpikeLogTimer <= 1.0) {
         const w = this.worldX;
@@ -1309,9 +1329,77 @@ export class Game {
       console.warn("[warmup] bird warmup failed:", e?.message ?? e);
     }
 
+    // -------------------------------------------------------------------------
+    // PERF-FIX — NPC head real-render warm-up. The three head sprites
+    // (prsan, nidjo, toni) each issue their own drawImage() of an Image
+    // that's only fully rasterised on first draw. Building a throw-away
+    // instance and calling draw() forces the GPU upload here instead of
+    // on the first mid-gameplay spawn.
+    // -------------------------------------------------------------------------
+    let npcDraws = 0;
+    try {
+      const { NPCPrsan } = await import("./npc_prsan.js");
+      const { NPCNidjo } = await import("./npc_nidjo.js");
+      const { NPCToni } = await import("./npc_toni.js");
+      const { EnemyAirplane } = await import("./enemy_airplane.js");
+      const tmpAirplane = new EnemyAirplane(0, 0, { scale: 0.8, direction: 1 });
+      // Wait for airplane head load — AssetLoader prewarm awaited
+      // decode() already; the EnemyAirplane internal promise will resolve
+      // immediately off the cached image.
+      await tmpAirplane.ready;
+      tmpAirplane.draw(ctx);
+      npcDraws++;
+      const tmpPrsan = new NPCPrsan(0, 0, { scale: 0.6, fallSpeed: 24 });
+      await tmpPrsan.ready;
+      tmpPrsan.draw(ctx);
+      npcDraws++;
+      const tmpNidjo = new NPCNidjo(0, 0, { scale: 0.7 });
+      await tmpNidjo.ready;
+      tmpNidjo.draw(ctx);
+      npcDraws++;
+      const tmpToni = new NPCToni(0, 0, { scale: 0.7 });
+      await tmpToni.ready;
+      tmpToni.draw(ctx);
+      npcDraws++;
+      await yield_();
+    } catch (e) {
+      console.warn("[warmup] npc warmup failed:", e?.message ?? e);
+    }
+
+    // -------------------------------------------------------------------------
+    // PERF-FIX — Konobari full 30-frame sweep. The earlier test only
+    // warmed 7 representative frames; on some machines the GPU still
+    // paid a first-use cost for the other 23 frames during gameplay.
+    // Walking through every frame once eliminates that residual hitch.
+    // -------------------------------------------------------------------------
+    let konobariFullFrames = 0;
+    try {
+      const konobariSheet = await KonobariAnimation.preload();
+      if (konobariSheet && konobariSheet.naturalWidth > 0) {
+        const FRAME_W = 384, FRAME_H = 448, COLS = 6;
+        for (let frame = 0; frame < 30; frame++) {
+          const sx = (frame % COLS) * FRAME_W;
+          const sy = Math.floor(frame / COLS) * FRAME_H;
+          ctx.save();
+          ctx.translate(this.width * 0.5, this.height * 0.5);
+          ctx.scale(0.325 * -1, 0.325);
+          ctx.drawImage(
+            konobariSheet,
+            sx, sy, FRAME_W, FRAME_H,
+            -192, -418, FRAME_W, FRAME_H,
+          );
+          ctx.restore();
+          konobariFullFrames++;
+          if (frame % 6 === 5) await yield_();
+        }
+      }
+    } catch (e) {
+      console.warn("[warmup] konobari full sweep failed:", e?.message ?? e);
+    }
+
     const elapsed = performance.now() - started;
-    console.log(
-      `[warmup] done in ${elapsed.toFixed(0)}ms (parallax×${layersDone}, parts×${partsDone}, imgCache×${imgCacheDone}${imageErrors ? `, imgErrors=${imageErrors}` : ""}, konobari×${konobariFramesDrawn}, bird×${birdDraws})`
+    console.info(
+      `[warmup] complete in ${elapsed.toFixed(0)}ms | parallax×${layersDone} player×${partsDone} imgCache×${imgCacheDone}${imageErrors ? ` imgErrors=${imageErrors}` : ""} konobari×${konobariFramesDrawn}+${konobariFullFrames} bird×${birdDraws} npc×${npcDraws}`
     );
   }
 

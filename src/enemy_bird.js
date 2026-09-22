@@ -97,9 +97,6 @@ export class EnemyBird {
     // Parts are injected by the spawner once AssetLoader.loadSvgParts()
     // resolves. Until then draw() is a no-op.
     this.parts = null;
-    // Diagnostic counters — bird.draw logs every 60th call so we can
-    // confirm draw() is actually running and inspect x/y/scale/parts.
-    this._drawCount = 0;
   }
 
   setParts(parts) {
@@ -212,11 +209,6 @@ export class EnemyBird {
     const pose = this.getPose();
     const c = this.config;
 
-    this._drawCount++;
-    // Diagnostic counter — kept for future debugging without spamming the
-    // console. Read it from a breakpoint or a temporary `console.log` if
-    // you ever need to confirm a bird is being drawn.
-
     ctx.save();
 
     // Same transform stack as Player.draw — translate to world pos, scale
@@ -253,18 +245,6 @@ export class EnemyBird {
     );
 
     ctx.restore();
-
-    if (!this._loggedFirstDraw) {
-      this._loggedFirstDraw = true;
-      // eslint-disable-next-line no-console
-      console.log("[bird] first draw at", {
-        x: this.x,
-        y: this.y,
-        scale: this.scale,
-        direction: this.direction,
-        parts: Object.keys(this.parts),
-      });
-    }
   }
 }
 
