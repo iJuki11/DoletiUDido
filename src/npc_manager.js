@@ -15,6 +15,7 @@ import { NPCPrsan } from "./npc_prsan.js";
 import { NPCNidjo } from "./npc_nidjo.js";
 import { NPCToni } from "./npc_toni.js";
 import { NPCKonobari } from "./npc_konobari.js";
+import { NPCDebs } from "./npc_debs.js";
 import {
   DIFFICULTY,
   getLevelConfig,
@@ -611,6 +612,126 @@ export class NPCKonobariManager {
 }
 
 /**
+ * Sub-manager for the "debs" floating NPC (the renamed EnemyUfo artwork).
+ * Atmospheric like NPCKonobariManager — no health, no damage — and the
+ * spawn gate mirrors konobari's level-config driven pattern.
+ *
+ * Lifetime: at most one debs on screen. Y is uniform-random across the
+ * canvas height (not slot-gridded like konobari because debs can fly
+ * anywhere naturally — the art is omnidirectional). Direction (+1/-1)
+ * is randomised on every spawn. Speed comes from levelConfig.debsMaxSpeed
+ * or a hard-coded fallback if the difficulty system doesn't yet carry
+ * debs keys.
+ *
+ * Despawn uses getBounds() so the sprite vanishes only after its full AABB
+ * has cleared the nearest edge (same standard as NPCNidjoManager and
+ * NPCToniManager after their despawn-margin fix).
+ */
+export class NPCDebsManager {
+  constructor({
+    spawnMargin = 120,
+    levelConfig = getLevelConfig(DIFFICULTY.EASY),
+  } = {}) {
+    this.spawnMargin = spawnMargin;
+    this.levelConfig = levelConfig;
+
+    this.instances = [];
+    this.scheduleNext();
+  }
+
+  /** Roll a random duration until the next spawn attempt. */
+  scheduleNext() {
+    if (!this.levelConfig?.debsEnabled) {
+      this.nextSpawn = 7;
+      return;
+    }
+    this.nextSpawn = rollInterval(
+      this.levelConfig?.debsIntervalMin ?? 12,
+      this.levelConfig?.debsIntervalMax ?? 22,
+    );
+  }
+
+  /**
+   * Create one debs instance: randomised direction (left or right), random
+   * forward speed, drawn anywhere across the canvas y-axis.
+   * Returns the new instance so callers (tests, debug overlays) can grab it.
+   */
+  spawnOne(width, height) {
+    // Pull scale and speed from levelConfig if present, otherwise fall back
+    // to reasonable defaults so the NPC works even without a difficulty-system
+    // entry for it. Matches NPCKonobariManager's tolerant reading style.
+    const scale = this.levelConfig?.debsScale ?? 0.3;
+    // -1 or +1 with equal probability — alternating traffic both ways.
+    const direction = Math.random() < 0.5 ? -1 : 1;
+    const speed = rollInterval(
+      this.levelConfig?.debsMinSpeed ?? 90,
+      this.levelConfig?.debsMaxSpeed ?? 150,
+    );
+    // Spawn just off the appropriate edge with a small margin so the
+    // sprite doesn't pop into existence fully on-screen.
+    const x = direction > 0
+      ? -this.spawnMargin
+      : width + this.spawnMargin;
+    // Uniform random y anywhere on the canvas — debs floats freely and
+    // is not constrained to a Y-slot grid like konobari.
+    const y = Math.random() * Math.max(1, height);
+
+    const debs = new NPCDebs(x, y, {
+      scale,
+      direction,
+      velocityX: direction * speed,
+    });
+    this.instances.push(debs);
+    return debs;
+  }
+
+  /** Tick timers and walk every active instance forward by deltaTime. */
+  update(deltaTime, width, height) {
+    if (!Number.isFinite(deltaTime) || deltaTime <= 0) return;
+
+    this.timer = (this.timer || 0) + deltaTime;
+
+    // Spawn gate: at most one debs on screen.
+    if (this.instances.length === 0 && this.timer >= this.nextSpawn) {
+      this.timer = 0;
+      this.scheduleNext();
+      this.spawnOne(width, height);
+    }
+
+    // Step every instance, then drop any whose AABB fully cleared an edge.
+    for (const debs of this.instances) {
+      debs.update(deltaTime);
+    }
+    this.despawnIfOffscreen(width);
+  }
+
+  /** Remove any instance whose full AABB has cleared the nearest edge. */
+  despawnIfOffscreen(width) {
+    this.instances = this.instances.filter((debs) => {
+      const b = debs.getBounds();
+      const pastLeft = b.right < 0 && debs.direction < 0;
+      const pastRight = b.left > width && debs.direction > 0;
+      return !(pastLeft || pastRight);
+    });
+  }
+
+  /** Render every active instance via its own draw method. */
+  draw(context) {
+    for (const debs of this.instances) {
+      debs.draw(context);
+    }
+  }
+
+  /** Wipe all instances and reset timers — called on game restart. */
+  reset(levelConfig = getLevelConfig(DIFFICULTY.EASY)) {
+    this.instances = [];
+    this.timer = 0;
+    this.levelConfig = levelConfig;
+    this.scheduleNext();
+  }
+}
+
+/**
  * NPCManager — top-level facade for every NPC type in the game.
  *
  * Currently owns a single sub-manager (prsan). New sub-managers can be
@@ -630,6 +751,10 @@ export class NPCManager {
     this.Konobari = new NPCKonobariManager({
       onPlayerHit: typeof onPlayerHit === "function" ? onPlayerHit : null,
     });
+    // Debs is an atmospheric NPC driven by the same levelConfig pipeline as
+    // konobari (interval, scale, speed) — falling back to hard-coded values
+    // for any debs* key the difficulty system hasn't been told about yet.
+    this.Debs = new NPCDebsManager();
   }
 
   attachPlayer(player) {
@@ -643,6 +768,9 @@ export class NPCManager {
     this.Nidjo.update(deltaTime, width, height, groundY);
     this.Toni.update(deltaTime, width, height, groundY);
     this.Konobari.update(deltaTime, width, height, player);
+    // Debs floats freely over the canvas (no groundY dep) and has no
+    // overlap with the player (no callback needed).
+    this.Debs.update(deltaTime, width, height);
   }
 
   draw(context) {
@@ -650,12 +778,16 @@ export class NPCManager {
     this.Nidjo.draw(context);
     this.Toni.draw(context);
     this.Konobari.draw(context);
+    this.Debs.draw(context);
   }
 
-  reset() {
+  /** Forward the levelConfig so konobari and debs can re-tune themselves
+   * when the player restarts the game (or the level changes mid-session). */
+  reset(levelConfig) {
     this.Prsan.reset();
     this.Nidjo.reset();
     this.Toni.reset();
-    this.Konobari.reset();
+    this.Konobari.reset(levelConfig);
+    if (this.Debs) this.Debs.reset(levelConfig);
   }
 }
