@@ -11,10 +11,25 @@ function loadSheet(url) {
     const promise = new Promise((resolve, reject) => {
       const image = new Image();
       image.decoding = 'async';
-      image.onload = () => {
+      // PERF-FIX-TESTA — wait for full decode before resolving. Without
+      // this the sheet is "loaded" but the bitmap is still being decoded
+      // in the background; the first drawImage() then stalls 50–100 ms
+      // waiting for decode to finish before the GPU upload can start.
+      // KonobariAnimation.preload() is awaited by warmUpRender(), so
+      // this fix only delays the loading screen, not gameplay.
+      image.onload = async () => {
         if (image.naturalWidth !== 2304 || image.naturalHeight !== 2240) {
           reject(new Error('Sprite sheet mora biti 2304 × 2240 px.'));
-        } else resolve(image);
+          return;
+        }
+        try {
+          await image.decode();
+        } catch (e) {
+          // image.decode() can reject on Safari/Firefox oddities even
+          // when the image is fully decodable. Fall through to resolve —
+          // the bitmap is still drawable.
+        }
+        resolve(image);
       };
       image.onerror = () => reject(new Error('Nije moguće učitati fabo_i_pacho.png.'));
       image.src = url;

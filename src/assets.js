@@ -138,4 +138,54 @@ export class AssetLoader {
     this.pending.set(cacheKey, promise);
     return promise;
   }
+
+  // PERF-FIX #3 — entity prewarm. The browser uploads every fresh
+  // HTMLImageElement to the GPU on its first drawImage call, which causes a
+  // 50–100 ms hitch on the very first frame each new NPC, airplane, bird,
+  // or konobar is drawn. We solve this in two halves:
+  //
+  //   1. DECODE early: pre-load every entity image into this.cache so the
+  //      network/decode cost is paid before gameplay starts, not during
+  //      a spawn.
+  //   2. UPLOAD early (warmUpRender, in game.js): iterate this.cache and
+  //      drawImage every HTMLImageElement once onto an offscreen canvas so
+  //      the GPU texture upload happens while the loading screen is still
+  //      up.
+  //
+  // Returns a single Promise that resolves once all loads settle (whether
+  // they succeeded or failed). A failure here MUST NOT lock the game on
+  // the loading screen — we log and move on. Caller awaits this to gate
+  // whenReady(), so the loading overlay only releases once everything
+  // pre-loaded below has had a chance to decode.
+  prewarmEntities() {
+    const started = performance.now();
+    // Airplane uses an absolute URL resolved against import.meta.url, not
+    // a relative path — loadImage() passes `src` straight to image.src, so
+    // any URL form works. For everything else the relative path matches
+    // what the spawners already use.
+    const airplaneUrl = new URL('../assets/images/cvrka.png', import.meta.url).href;
+    const jobs = [
+      this.loadImage('airplane-head', airplaneUrl),
+      this.loadSvgParts('./assets/images/enemy_bird.svg', [
+        'farWing', 'nearWing', 'tail', 'feet', 'body', 'head',
+      ]),
+      this.loadImage('prsan-head', './assets/images/prsan_head.png'),
+      this.loadImage('nidjo-head', './assets/images/nidjo_head.png'),
+      this.loadImage('toni-head', './assets/images/toni_head.png'),
+      this.loadImage('fabo-i-pacho', './assets/images/fabo_i_pacho.png'),
+    ];
+
+    const settled = Promise.all(jobs.map((p) => p.catch(() => null)));
+    return settled.then((results) => {
+      const elapsed = performance.now() - started;
+      // Count successful HTMLImageElements that ended up in the cache.
+      let imageCount = 0;
+      for (const v of this.cache.values()) {
+        if (v instanceof HTMLImageElement && v.complete) imageCount++;
+      }
+      const failed = results.filter((r) => r === null).length;
+      const suffix = failed > 0 ? ` (${failed} failed)` : '';
+      console.log(`[assets] prewarmEntities done in ${elapsed.toFixed(0)}ms (${imageCount} images)${suffix}`);
+    });
+  }
 }

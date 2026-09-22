@@ -88,6 +88,12 @@ export class NPCPrsanManager {
     const fallSpeed = this.minFallSpeed + Math.random() * (this.maxFallSpeed - this.minFallSpeed);
     const drift = this.minDrift + Math.random() * (this.maxDrift - this.minDrift);
     const scale = 0.55 + Math.random() * 0.15;
+    // PERF-DIAG #6 — spawn marker. We log with performance.now() so
+    // long-task entries (which use the same DOMHighResTimeStamp
+    // timeline) can be cross-referenced: if a [LONGTASK] entry's
+    // startTime lands within ~16ms of a [spawn] stamp, the hitch
+    // likely correlates with that spawn.
+    console.log(`[spawn] prsan t=${performance.now().toFixed(1)}`);
 
     const prsan = new NPCPrsan(x, y, {
       scale,
@@ -212,6 +218,8 @@ export class NPCNidjoManager {
       : width + this.spawnMargin;
     // Chassis origin sits WHEEL_RADIUS (=31 in NPCNidjo) above the ground.
     const y = groundY + 75 * scale;
+    // PERF-DIAG #6 — spawn marker (see [spawn] prsan comment).
+    console.log(`[spawn] nidjo t=${performance.now().toFixed(1)} dir=${direction > 0 ? "R" : "L"}`);
 
     const car = new NPCNidjo(x, y, {
       scale,
@@ -326,6 +334,8 @@ export class NPCToniManager {
       : width + this.spawnMargin;
     // Toni rides 90 * scale above the ground line (positive offset).
     const y = groundY + 90 * scale;
+    // PERF-DIAG #6 — spawn marker (see [spawn] prsan comment).
+    console.log(`[spawn] toni t=${performance.now().toFixed(1)} dir=${direction > 0 ? "R" : "L"}`);
 
     const truck = new NPCToni(x, y, {
       scale,
@@ -477,6 +487,8 @@ export class NPCKonobariManager {
     // existence fully on-screen (the slot grid only sets Y).
     const x = width + this.spawnMargin;
     const y = this.slotY(this.pickSlot(), height);
+    // PERF-DIAG #6 — spawn marker (see [spawn] prsan comment).
+    console.log(`[spawn] konobar t=${performance.now().toFixed(1)}`);
 
     const konobar = new NPCKonobari(x, y, {
       scale,

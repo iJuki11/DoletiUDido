@@ -8,6 +8,9 @@ import { DIFFICULTY, getLevel, getLevelConfig } from "./difficulty_system.js";
 import { NPCManager } from "./npc_manager.js";
 import { CollisionEffects, COLLISION_EFFECT_DURATION } from "./collision_effects.js";
 import { SKIP_LAYER_IDS, ZOOM_BACKGROUND } from "./parallax-background.js";
+import { FPSLogic } from "./fps_logic.js";
+import { KonobariAnimation } from "./konobariAnimation.js";
+import { EnemyBird } from "./enemy_bird.js";
 
 const CITY_WORLD_LENGTH = 4500;
 const FRAME_TIMING_SAMPLE_SIZE = 120;
@@ -196,6 +199,19 @@ export class Game {
       console.warn("[parallax] background load failed:", error);
     });
 
+    // PERF-FIX #3 — entity prewarm. Kicks off in the background so the
+    // network/decode cost happens during the loading screen, not mid-
+    // gameplay when a fresh NPC/airplane/bird is spawned. Awaited from
+    // whenReady() below so the loading overlay only releases once every
+    // entity image has had a chance to land in this.assets.cache.
+    this.entityLoadPromise = this.assets.prewarmEntities();
+
+    // PERF-DIAG #4 — frame cap moved to a dedicated module. Default is
+    // uncapped (0) so the game honours whatever refresh rate the
+    // display provides. Wire setFpsCap() through this.fpsLogic so the
+    // console toggle and the game loop share the same source of truth.
+    this.fpsLogic = new FPSLogic(0);
+
     this.frame = this.frame.bind(this);
     this.resize = this.resize.bind(this);
     window.addEventListener("resize", this.resize);
@@ -216,6 +232,16 @@ export class Game {
     // cheatsheet. `forceDifficulty('hard')` lets a tester promote without
     // grinding collectibles; `addCollectibles(n)` simulates pickups.
     if (typeof window !== "undefined") {
+      // PERF-DIAG #4 — frame cap toggle. Default 0 = no cap (browser
+      // decides). Use `__game.setFpsCap(60)` in the console to lock to
+      // 60fps, or `__game.setFpsCap(0)` to release. Delegates to the
+      // standalone FPSLogic module so the game loop and the toggle
+      // share a single source of truth.
+      window.__game.setFpsCap = (fps) => {
+        const applied = this.fpsLogic.setFps(fps);
+        console.log("FPS cap:", applied === 0 ? "uncapped" : applied + "fps");
+        return applied;
+      };
       window.__game.forceDifficulty = (level) => {
         if (!Object.values(DIFFICULTY).includes(level)) {
           console.warn(`Unknown difficulty "${level}". Valid: ${Object.values(DIFFICULTY).join(", ")}`);
@@ -298,6 +324,11 @@ export class Game {
     this.popups = [];
     this.collisionEffects.clear();
     this.collectibles.reset();
+    // PERF-DIAG #6 — anchor for the "first 5s" red zone in the overlay.
+    // Lets us separate hitching that survives warm-up (real bug) from
+    // hitching that only happened on cold-cache startup (already paid).
+    this.gameplayStartTime = performance.now();
+    this._redZonePeakWall = 0;
     // Pass the freshly-computed levelConfig so each spawn manager
     // re-arms its timer with the right cadence before the first frame.
     const levelConfig = this.getLevelConfig();
@@ -403,6 +434,21 @@ export class Game {
     // both feel smooth.
     const deltaTime = Math.min(frameTime / 1000, 0.1);
     this.lastTime = timestamp;
+
+    // PERF-DIAG #4 — frame cap. On high-refresh displays (120/144 Hz) the
+    // browser fires rAF more often than the game's render cadence and we
+    // burn CPU drawing frames the user can't see. fpsLogic.shouldRender()
+    // drops intermediate frames by re-scheduling rAF without running
+    // update/draw. The skipped frames still count toward perf timing so
+    // the overlay sees the true gap, not a misleading "we rendered fast".
+    //
+    // Toggle: in the console, `__game.setFpsCap(60)` to lock, `__game.setFpsCap(0)`
+    // to release. Default is uncapped (the browser decides).
+    if (!this.fpsLogic.shouldRender(frameTime)) {
+      requestAnimationFrame(this.frame);
+      return;
+    }
+
     // PERF-DIAG: stamp frame start so the post-draw block can measure the
     // full frame cost (update + draw). Cheap, no side effects.
     this.frameStartMs = performance.now();
@@ -448,39 +494,241 @@ export class Game {
     // Rolling stats — keep last 60 samples so the overlay shows a stable
     // average and the worst-frame pick has a meaningful window.
     if (!this._frameSamples) this._frameSamples = [];
-    this._frameSamples.push({ frameMs, updateMs, stepMs });
+    // frameTime = wall-clock gap between rAF ticks (what browser saw).
+    // frameMs = our measured draw duration. Disagreement between the
+    // two pinpoints where the stall happened (see worst-of-N comment).
+    this._frameSamples.push({ frameTime, frameMs, updateMs, stepMs, frameStartMs: this.frameStartMs });
     if (this._frameSamples.length > 60) this._frameSamples.shift();
     // Draw the overlay LAST so it sits on top of everything (vignette
     // already painted). We hand it a fresh context state so we don't
     // pollute the canvas2d state for future frames.
     this.drawPerfOverlay();
+    // PERF-DIAG #5 — parallax depth correlation. We log the parallax
+    // step's exact cost plus the worldX value at the moment it spiked.
+    // Patterns we're hunting:
+    //   (a) "texture upload" — first time a layer is drawn at GPU level
+    //       tends to spike once and then settle. Look for spiking +
+    //       steady=cheap.
+    //   (b) "loop boundary" — when worldX wraps past 4500px the renderer
+    //       drops cached positions and recomputes. Look for spiking at
+    //       round(worldX / 4500) edges.
+    //   (c) "worldX = X where X is a prime" — random sampling noise
+    //       would correlate with nothing. Look for steady=cheap after
+    //       a few spikes — that's pattern (a).
+    // Logged at INFO (not warn) so it doesn't drown the worst-of-N
+    // line. Sampled only on parallax spikes, max once per second.
+    if (steps.parallax > 30 && this._parallaxSpikeLogTimer == null) {
+      this._parallaxSpikeLogTimer = 0;
+    }
+    if (this._parallaxSpikeLogTimer != null) {
+      this._parallaxSpikeLogTimer += deltaTime;
+      if (this._parallaxSpikeLogTimer <= 1.0) {
+        const w = this.worldX;
+        console.log(
+          "[parallax-spike]",
+          steps.parallax.toFixed(1) + "ms",
+          "worldX=" + Math.round(w),
+          "loopPos=" + (w / 4500).toFixed(3),
+          "nearestWrap=" + Math.round(w / 4500) * 4500,
+          "wrapGap=" + Math.round(w % 4500),
+        );
+      } else {
+        this._parallaxSpikeLogTimer = null;
+      }
+    }
+
     // Once per second, log the WORST frame in the last 60 — but ONLY
     // when it actually blew the 60fps budget. If the worst frame was
     // <=18ms the game is healthy and we stay silent. The moment a hitch
     // happens we surface exactly one line per second with the broken-
     // down step costs, so the console stays scannable instead of being
     // a wall of identical 16.7ms noise.
+    //
+    // frameTime = wall-clock gap between rAF ticks (what the browser
+    // actually saw). frameMs = our draw duration. They can disagree:
+    //   frameTime=106ms frameMs=5ms   → browser stalled outside our
+    //                                   draw (GPU/compositor sync,
+    //                                   texture upload, GC).
+    //   frameTime=106ms frameMs=105ms → JS-side hitch (we'll see it
+    //                                   in the step breakdown).
     this._perfLogTimer = (this._perfLogTimer || 0) + deltaTime;
     if (this._perfLogTimer >= 1.0) {
       this._perfLogTimer = 0;
       let worst = this._frameSamples[0];
       for (const s of this._frameSamples) {
-        if (s.frameMs > worst.frameMs) worst = s;
+        if (s.frameTime > worst.frameTime) worst = s;
       }
       // Quiet when healthy. 18ms = 60fps budget + a hair of slack.
-      if (worst.frameMs > 18) {
+      if (worst.frameTime > 18) {
+        // PERF-DIAG #6 — on the FIRST hitch, install the long-task
+        // observer so subsequent samples can attribute the time. We do
+        // it lazily so healthy runs don't pay the observer overhead.
+        if (!this._longTaskObserverInstalled) this._installLongTaskObserver();
         const drawMs = worst.frameMs - worst.updateMs;
         const s = worst.stepMs;
+        const stall = worst.frameTime - worst.frameMs;
+        // PERF-DIAG #5/#6 — pinpoint what happens during the stall.
+        // Two cheap reads, no observers:
+        //   • performance.memory.usedJSHeapSize — Chrome only. If the heap
+        //     dropped sharply since the last sample, the browser just ran
+        //     a major GC (the most common cause of a 100ms hitch with no JS
+        //     work to show for it). We log the delta in MB.
+        //   • longTasks[] — populated by a PerformanceObserver registered
+        //     lazily on first hitch; if non-empty, the browser blamed a
+        //     specific task on the main thread for taking >50ms. The array
+        //     is cleared each second so we only log tasks that overlapped
+        //     this 1s window.
+        const mem = (typeof performance !== "undefined" && performance.memory)
+          ? performance.memory.usedJSHeapSize
+          : 0;
+        const memMB = mem ? (mem / 1048576).toFixed(1) : "n/a";
+        const heapDeltaMB = mem && this._lastHeapBytes
+          ? (((mem - this._lastHeapBytes) / 1048576)).toFixed(2)
+          : "n/a";
+        if (mem) this._lastHeapBytes = mem;
+        const longTaskCount = this._longTasksSinceLastLog
+          ? this._longTasksSinceLastLog.length
+          : 0;
+        // Correlate long-task entries with this worst hitch by time. The
+        // hitch window is [worst.frameStartMs, worst.frameStartMs +
+        // worst.frameTime]. We pick the entry whose startTime is closest
+        // to frameStartMs (within one frame) and print its full attribution
+        // so we can see what the browser blamed for the time.
+        let correlated = null;
+        if (this._longTasksSinceLastLog && this._longTasksSinceLastLog.length) {
+          let bestDelta = Infinity;
+          for (const t of this._longTasksSinceLastLog) {
+            const dt = Math.abs(t.startTime - worst.frameStartMs);
+            // Only consider tasks whose start is within one hitch duration
+            // of the worst frame start — otherwise it's noise from
+            // earlier in the 1s window.
+            if (dt < bestDelta && dt <= Math.max(worst.frameTime, 200)) {
+              bestDelta = dt;
+              correlated = t;
+            }
+          }
+        }
+        const longTaskSummary = this._longTasksSinceLastLog && this._longTasksSinceLastLog.length
+          ? `, longTasks=${this._longTasksSinceLastLog.length} max=${Math.max(...this._longTasksSinceLastLog.map(t => t.duration)).toFixed(0)}ms`
+          : "";
+        if (this._longTasksSinceLastLog) this._longTasksSinceLastLog.length = 0;
         console.warn(
-          "[worst 1s]", worst.frameMs.toFixed(1) + "ms",
+          "[worst 1s]", worst.frameTime.toFixed(1) + "ms",
+          "wall=" + worst.frameTime.toFixed(1),
+          "draw=" + worst.frameMs.toFixed(1),
+          "stall=" + stall.toFixed(1),
           "upd=" + worst.updateMs.toFixed(1),
-          "draw=" + drawMs.toFixed(1),
           "parallax=" + s.parallax.toFixed(1),
           "ent=" + s.ent.toFixed(1),
           "player=" + s.player.toFixed(1),
           "vig=" + s.vig.toFixed(1),
+          "heap=" + memMB + "MB",
+          "Δheap=" + heapDeltaMB + "MB" + longTaskSummary,
         );
+        // PERF-DIAG #7 — correlate hitch with the nearest spawn within the
+        // last 1s window. We pick the spawn with the smallest |Δt| vs
+        // the worst frame start. If the nearest spawn happened within
+        // 200ms of the hitch and on the SAME side (spawn BEFORE hitch),
+        // it's likely the cause. The marker prefix is `[hitch↔spawn]` so
+        // it's trivial to grep for.
+        if (this._spawnLog && this._spawnLog.length) {
+          const windowStart = worst.frameStartMs - 1000;
+          let nearest = null;
+          let nearestAbs = Infinity;
+          for (const s2 of this._spawnLog) {
+            if (s2.t < windowStart || s2.t > worst.frameStartMs) continue;
+            const dt = worst.frameStartMs - s2.t;
+            const adt = Math.abs(dt);
+            if (adt < nearestAbs) {
+              nearestAbs = adt;
+              nearest = { ...s2, dt };
+            }
+          }
+          if (nearest && nearestAbs < 500) {
+            console.warn(
+              `[hitch↔spawn] type=${nearest.type} Δt=${nearest.dt.toFixed(1)}ms (worst frame was ${worst.frameTime.toFixed(0)}ms)`
+            );
+          }
+        }
+        // PERF-DIAG #6 — dedicated line for the correlated long-task.
+        // Easier to grep for "LONGTASK" than to dig through the
+        // worst-1s blob.
+        if (correlated) {
+          const lt = correlated;
+          const offset = (lt.startTime - worst.frameStartMs).toFixed(1);
+          const attribSummary = lt.attribution && lt.attribution.length
+            ? lt.attribution
+                .map((a) => {
+                  // The "name" field is the most actionable (script /
+                  // layout / paint / decode-image / decode-script /
+                  // system). The other fields are present in Chromium
+                  // for further triage.
+                  return `${a.name}${a.type ? `:${a.type}` : ""}${a.duration ? `(${a.duration.toFixed(0)}ms)` : ""}${a.host ? `@${a.host}` : ""}${a.containerSrc ? ` ${a.containerSrc}` : ""}`;
+                })
+                .join(" | ")
+            : "(no attribution)";
+          console.warn(
+            `[LONGTASK] start=${lt.startTime.toFixed(1)} ΔvsFrameStart=${offset}ms duration=${lt.duration.toFixed(1)}ms entryType=${lt.entryType} name=${lt.name} attrib=[${attribSummary}]`
+          );
+        }
       }
+    }
+  }
+
+  // PERF-DIAG #6 — long-task observer. Browsers report any contiguous
+  // main-thread execution >50ms via PerformanceObserver({entryTypes:
+  // ["longtask"]}). We capture every field the spec exposes so the
+  // correlator can pick the right entry by startTime when a hitch
+  // happens. attribution[] (Chromium-only) tells us *which* subsystem
+  // the browser blames for the time — usually {containerType, src,
+  // host, type, name, duration} — and is the cheapest path to
+  // answering "where did the 100ms go?" without manually instrumenting
+  // every function.
+  //
+  // Notes:
+  // • entry.duration = contiguous busy time on main thread
+  // • entry.startTime = wall-clock anchor (same timeline as rAF)
+  // • entry.name / entryType / entry.attribution — debug-only fields,
+  //   never read in the hot path
+  // • Installed lazily on the first hitch so healthy runs don't pay
+  //   the observer overhead.
+  _installLongTaskObserver() {
+    if (this._longTaskObserverInstalled) return;
+    this._longTaskObserverInstalled = true;
+    this._longTasksSinceLastLog = [];
+    try {
+      const po = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          this._longTasksSinceLastLog.push({
+            startTime: entry.startTime,
+            duration: entry.duration,
+            name: entry.name,
+            entryType: entry.entryType,
+            // Attribution is Chromium-only. We copy whatever fields are
+            // present so the correlator can print them without crashing
+            // on missing ones. Each attribution item can carry a `name`
+            // ("script" / "layout" / "paint" / "system" / "fetch" /
+            // "decode-image" / "decode-script") which is the answer we
+            // actually want.
+            attribution: (entry.attribution ?? []).map((a) => ({
+              name: a.name,
+              containerType: a.containerType,
+              containerSrc: a.containerSrc,
+              containerId: a.containerId,
+              containerName: a.containerName,
+              host: a.host,
+              duration: a.duration,
+              type: a.type,
+            })),
+          });
+        }
+      });
+      po.observe({ entryTypes: ["longtask"] });
+      console.log("[perf-diag] long-task observer installed");
+    } catch (e) {
+      // PerformanceObserver isn't supported on every browser — fail
+      // silently and fall back to the heap-delta signal.
+      console.warn("[perf-diag] long-task observer unavailable:", e?.message ?? e);
     }
   }
 
@@ -532,9 +780,56 @@ export class Game {
     const groundY = this.getGroundY();
     this.collectibles.update(deltaTime, this.speed, this.width, this.height, groundY);
     const levelConfig = this.getLevelConfig();
+    // PERF-DIAG #7 — detect entity spawns by watching manager.instance
+    // arrays grow across the update() call. We sample lengths BEFORE each
+    // manager runs, then AFTER, and any increase is recorded with a
+    // performance.now() stamp and the entity type. The worst-1s hitch
+    // log then correlates hitch time → nearest spawn type. This is the
+    // BEFORE/AFTER comparison that the warm-up fix needs to be
+    // validated against — "did the bird-spawn hitch go down?".
+    if (!this._spawnLog) this._spawnLog = [];
+    const _t0 = performance.now();
+    const _lenBefore = {
+      plane: this.airplaneManager?.instances?.length ?? 0,
+      bird: this.birdManager?.instances?.length ?? 0,
+      // NPCManager holds sub-managers (Prsan, Nidjo, Toni, Konobari) so we
+      // measure the total count instead of guessing which sub-type grew.
+      npc: this.npcManager?.allInstances?.length
+        ?? (this.npcManager?.Prsan?.instances?.length ?? 0)
+        + (this.npcManager?.Nidjo?.instances?.length ?? 0)
+        + (this.npcManager?.Toni?.instances?.length ?? 0)
+        + (this.npcManager?.Konobari?.instances?.length ?? 0),
+    };
     this.airplaneManager.update(deltaTime, this.width, this.height, this.player, levelConfig);
     this.birdManager.update(deltaTime, this.width, this.height, this.player, levelConfig);
     this.npcManager.update(deltaTime, this.width, this.height, groundY, this.player);
+    // PERF-DIAG #7 — record any spawns that happened during this update.
+    const _lenAfter = {
+      plane: this.airplaneManager?.instances?.length ?? 0,
+      bird: this.birdManager?.instances?.length ?? 0,
+      npc: this.npcManager?.allInstances?.length
+        ?? (this.npcManager?.Prsan?.instances?.length ?? 0)
+        + (this.npcManager?.Nidjo?.instances?.length ?? 0)
+        + (this.npcManager?.Toni?.instances?.length ?? 0)
+        + (this.npcManager?.Konobari?.instances?.length ?? 0),
+    };
+    const _t1 = performance.now();
+    if (_lenAfter.plane > _lenBefore.plane) {
+      this._spawnLog.push({ type: "airplane", t: _t1 });
+    }
+    if (_lenAfter.bird > _lenBefore.bird) {
+      this._spawnLog.push({ type: `bird×${_lenAfter.bird - _lenBefore.bird}`, t: _t1 });
+    }
+    if (_lenAfter.npc > _lenBefore.npc) {
+      this._spawnLog.push({ type: `npc×${_lenAfter.npc - _lenBefore.npc}`, t: _t1 });
+    }
+    // Trim the log so it doesn't grow unbounded during a long run. Keep
+    // only the last 10 seconds of spawns — the worst-1s hitch window
+    // never looks back further than that anyway.
+    const cutoff = _t1 - 10000;
+    while (this._spawnLog.length > 0 && this._spawnLog[0].t < cutoff) {
+      this._spawnLog.shift();
+    }
     this.collisionEffects.update(deltaTime);
     const collectedItems = this.collectibles.collect(this.player.getBounds());
 
@@ -728,10 +1023,24 @@ export class Game {
    */
   whenReady() {
     return new Promise((resolve) => {
+      // PERF-FIX #3 — also wait for entity prewarm (NPC/airplane/bird/
+      // konobar heads + bird SVG parts). Main.js gates the loading
+      // overlay on whenReady(), so this guarantees the warm-up has every
+      // cached image ready before the user can hit IGRAJ. The entity
+      // promise is fire-and-forget — mark _entityReady true once it
+      // settles (success OR failure, never block on a missing image).
+      if (this.entityLoadPromise && this._entityReady === undefined) {
+        this.entityLoadPromise.then(
+          () => { this._entityReady = true; },
+          () => { this._entityReady = true; },
+        );
+      } else if (this._entityReady === undefined) {
+        this._entityReady = true;
+      }
       const check = () => {
         const parallaxReady = this.parallaxProject !== null || this.parallaxLoadFailed;
         const birdReady = this.player.parts !== null;
-        if (parallaxReady && birdReady) {
+        if (parallaxReady && birdReady && this._entityReady === true) {
           resolve();
           return;
         }
@@ -747,6 +1056,265 @@ export class Game {
     return this.parallaxLoadFailed;
   }
 
+  // PERF-FIX #2 — GPU cache pre-warm. The diagnostic data showed that the
+  // hitching (100-130ms wall, 0.5ms draw, 132ms stall) is caused by the
+  // browser lazily uploading parallax layers + player SVG parts to GPU
+  // textures the first time they show up in a draw. We pay this cost
+  // here, while the loading screen is still up, so the user never sees it.
+  //
+  // Design choices (with feedback from reviewer):
+  //   - Offscreen canvas is the SAME size as the visible canvas, with the
+  //     SAME pixelRatio and the SAME clip/translate/scale transforms that
+  //     draw() uses. A 2x2 stub was considered but rejected — the browser
+  //     is allowed to optimise that path differently from the real one.
+  //   - We yield to the event loop between layers (setTimeout 0) so the
+  //     main thread never blocks >16ms and the loading screen stays
+  //     responsive. The whole sweep runs in well under the caller's 2s
+  //     race timeout.
+  //   - We render the parallax at 5 worldX positions (0, 1000, 2000, 3000,
+  //     4000) to warm different source regions of each loopable layer.
+  //   - Exceptions are caught per-layer and logged but never propagate.
+  //     This is best-effort: a failure here MUST NOT block the game.
+  //   - No internal timeout. The single timeout lives in main.js (Promise
+  //     race) so there's only one timer in flight.
+  async warmUpRender() {
+    const started = performance.now();
+    let layersDone = 0;
+    let partsDone = 0;
+    // Build an offscreen canvas that matches the live canvas so the
+    // browser goes through the same GPU upload path. We never attach it
+    // to the DOM — only the GPU compositor cares about it.
+    let off;
+    try {
+      off = document.createElement("canvas");
+    } catch (_) {
+      console.warn("[warmup] cannot create canvas; skipping");
+      return;
+    }
+    off.width = Math.round(this.width * this.pixelRatio);
+    off.height = Math.round(this.height * this.pixelRatio);
+    const ctx = off.getContext("2d");
+    if (!ctx) {
+      console.warn("[warmup] cannot get 2d context; skipping");
+      return;
+    }
+    ctx.setTransform(this.pixelRatio, 0, 0, this.pixelRatio, 0, 0);
+
+    // Helper: yield one macrotask so the loading screen can paint, the
+    // event loop can run other handlers, and Chrome doesn't flag us as
+    // a "long task" (>50ms blocking).
+    const yield_ = () => new Promise((r) => setTimeout(r, 0));
+
+    // --- Parallax layers ---
+    // Replicate the relevant subset of draw()'s parallax step: clearRect,
+    // sky fill, ground strip, clip, then ParallaxRuntime.render at five
+    // worldX positions. Each layer is wrapped in try/catch independently.
+    if (this.parallaxSceneCache && globalThis.ParallaxRuntime && this.parallaxProject) {
+      const scene = this.parallaxProject.scene;
+      const groundY = this.getGroundY();
+      const zoom = Number.isFinite(ZOOM_BACKGROUND) && ZOOM_BACKGROUND > 0
+        ? ZOOM_BACKGROUND : 1;
+      const baseScale = this.height / scene.canvas.height;
+      const scale = baseScale * zoom;
+      const scenePixelHeight = scene.canvas.height * scale;
+      const WARMUP_WORLDX = [0, 1000, 2000, 3000, 4000];
+      for (const wx of WARMUP_WORLDX) {
+        try {
+          ctx.clearRect(0, 0, this.width, this.height);
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(0, 0, this.width, this.height);
+          ctx.clip();
+          ctx.fillStyle = this.cachedSkyGradient;
+          ctx.fillRect(0, 0, this.width, this.height);
+          ctx.fillStyle = "#2f3436";
+          ctx.fillRect(0, groundY, this.width, this.height - groundY);
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(0, 0, this.width, this.height);
+          ctx.clip();
+          globalThis.ParallaxRuntime.render(
+            ctx,
+            this.parallaxSceneCache,
+            this.parallaxImages,
+            wx,
+            {
+              width: this.width,
+              height: scenePixelHeight,
+              viewportWidth: this.width / scale,
+              clear: false,
+            }
+          );
+          ctx.restore();
+          ctx.restore();
+          layersDone++;
+        } catch (e) {
+          console.warn("[warmup] parallax layer render failed at wx=" + wx, e);
+        }
+        await yield_();
+      }
+    } else {
+      console.warn("[warmup] parallaxSceneCache not ready; skipping parallax");
+    }
+
+    // --- Player SVG parts ---
+    // The player's draw() does 5 drawImage calls (body, wing, hat, two
+    // legs). We replicate that call shape so the GPU uploads the same
+    // SVG textures it would on the first real frame.
+    const parts = this.player?.parts;
+    if (parts) {
+      const PART_KEYS = ["body", "wing", "hat", "leftLeg", "rightLeg"];
+      for (const key of PART_KEYS) {
+        try {
+          const img = parts[key];
+          if (!img) continue;
+          ctx.clearRect(0, 0, this.width, this.height);
+          ctx.drawImage(img, 0, 0, 840, 1080);
+          partsDone++;
+        } catch (e) {
+          console.warn("[warmup] player part '" + key + "' failed:", e);
+        }
+        await yield_();
+      }
+    } else {
+      console.warn("[warmup] player parts not ready; skipping");
+    }
+
+    // --- Cached entity images (PERF-FIX #3) ---
+    // Every NPC/airplane/bird spawns a fresh HTMLImageElement (or reuses
+    // a shared one whose first drawImage call still triggers a GPU
+    // texture upload). Iterate this.assets.cache and force-draw each
+    // loaded image at least once into the offscreen canvas so the GPU
+    // upload happens now, not on the first gameplay draw. Per-image
+    // try/catch because a single broken asset must not abort the whole
+    // sweep. We yield between batches so the loading screen keeps
+    // animating and Chrome's "long task" warning stays quiet.
+    let imgCacheDone = 0;
+    let imageErrors = 0;
+    if (this.assets && this.assets.cache && this.assets.cache.size > 0) {
+      const entities = Array.from(this.assets.cache.values()).filter(
+        (v) => v instanceof HTMLImageElement && v.complete && v.naturalWidth > 0,
+      );
+      const W = this.width;
+      const H = this.height;
+      for (const img of entities) {
+        try {
+          ctx.clearRect(0, 0, W, H);
+          // Draw at the image's natural size, centred. We don't know
+          // what dimensions the spawner will use at runtime, so the
+          // goal is just to trigger the GPU upload — any drawImage
+          // call suffices. Subsequent gameplay draws will overwrite
+          // anyway.
+          ctx.drawImage(img, 0, 0);
+          imgCacheDone++;
+        } catch (e) {
+          imageErrors++;
+          console.warn("[warmup] cached image draw failed", e);
+        }
+        // Yield every few images to stay below the 50 ms long-task limit.
+        if ((imgCacheDone + imageErrors) % 4 === 0) await yield_();
+      }
+      // Final yield so the loading-screen repaint before main.js
+      // swaps the overlay in has a chance to run.
+      await yield_();
+    } else {
+      console.warn("[warmup] no entity cache; skipping img cache sweep");
+    }
+
+    // -------------------------------------------------------------------------
+    // PERF-FIX-TESTA — Konobari first-use decode + per-frame warm-up.
+    //
+    // Hypothesis: the first NPCKonobari spawn stalls 50–100 ms because the
+    // 2304×2240 PNG sprite sheet finishes its decode + GPU upload only on
+    // the first drawImage() call. By preloading the sheet, awaiting its
+    // decode, AND drawing seven representative frames (0,1,6,12,18,24,29)
+    // onto the offscreen canvas BEFORE gameplay starts, we force the GPU
+    // upload to happen on the loading screen instead of mid-game.
+    //
+    // The KonobariAnimation.draw() path applies translate→rotate→scale→
+    // scale(-dir)→drawImage. We replicate that exact pipeline here so the
+    // warmed state matches what gameplay will actually exercise.
+    // -------------------------------------------------------------------------
+    let konobariFramesDrawn = 0;
+    try {
+      const konobariSheet = await KonobariAnimation.preload();
+      if (konobariSheet && konobariSheet.naturalWidth > 0) {
+        // Mirror the real draw() transform stack so the warm-up matches
+        // gameplay exactly.
+        const FRAME_W = 384, FRAME_H = 448, COLS = 6;
+        const warmFrames = [0, 1, 6, 12, 18, 24, 29];
+        for (const frame of warmFrames) {
+          const sx = (frame % COLS) * FRAME_W;
+          const sy = Math.floor(frame / COLS) * FRAME_H;
+          ctx.save();
+          ctx.translate(this.width * 0.5, this.height * 0.5);
+          ctx.rotate(0);
+          ctx.scale(0.325 * -1, 0.325); // direction -1 like gameplay
+          ctx.drawImage(
+            konobariSheet,
+            sx, sy, FRAME_W, FRAME_H,
+            -192, -418, FRAME_W, FRAME_H,
+          );
+          ctx.restore();
+          konobariFramesDrawn++;
+          await yield_();
+        }
+      } else {
+        console.warn("[warmup] konobari sheet not ready; skipping frame warmup");
+      }
+    } catch (e) {
+      console.warn("[warmup] konobari warmup failed:", e?.message ?? e);
+    }
+
+    // -------------------------------------------------------------------------
+    // PERF-FIX-TESTB — EnemyBird real-render warm-up.
+    //
+    // Hypothesis: the first bird spawn stalls 50–100 ms because the SVG
+    // parts are decoded, transformed (translate/rotate/scale + horizontal
+    // flip) and uploaded to the GPU only on first draw(). We build a
+    // throw-away EnemyBird with the real parts and run bird.draw() several
+    // times across different wing phases so the GPU sees the same work it
+    // would see during gameplay.
+    //
+    // NOTE: we do NOT mutate gameplay render code. The instance is created
+    // and discarded here only.
+    // -------------------------------------------------------------------------
+    let birdDraws = 0;
+    try {
+      // Bird parts are loaded on demand by the spawner via loadSvgParts().
+      // Since warmUpRender() runs BEFORE any bird spawns, we need to
+      // explicitly request the parts now. We do that by calling the
+      // AssetLoader's loadSvgParts() — same call the spawner uses — so
+      // the warm-up exercises the EXACT same code path the gameplay will.
+      const birdParts = await this.assets.loadSvgParts(
+        "./assets/images/enemy_bird.svg",
+        ["farWing", "nearWing", "tail", "feet", "body", "head"],
+      );
+      if (birdParts) {
+        const tmp = new EnemyBird(0, 0, { scale: 0.19, direction: -1 });
+        tmp.setParts(birdParts);
+        // Walk through ~6 wing phases (≈0.55s of wing sweep at 10.8 Hz)
+        // so the GPU sees the full range of wingAngle that gameplay
+        // will produce.
+        for (let i = 0; i < 6; i++) {
+          tmp.time = i * 0.0926; // = 1/(2*wingSpeed) for variety
+          tmp.draw(ctx);
+          birdDraws++;
+          await yield_();
+        }
+      } else {
+        console.warn("[warmup] bird parts not in cache; skipping bird warmup");
+      }
+    } catch (e) {
+      console.warn("[warmup] bird warmup failed:", e?.message ?? e);
+    }
+
+    const elapsed = performance.now() - started;
+    console.log(
+      `[warmup] done in ${elapsed.toFixed(0)}ms (parallax×${layersDone}, parts×${partsDone}, imgCache×${imgCacheDone}${imageErrors ? `, imgErrors=${imageErrors}` : ""}, konobari×${konobariFramesDrawn}, bird×${birdDraws})`
+    );
+  }
+
   draw() {
     const context = this.context;
     context.clearRect(0, 0, this.width, this.height);
@@ -760,7 +1328,12 @@ export class Game {
     const steps = (this._perfSteps = {});
     let stepStart = performance.now();
 
-    if (this.parallaxSceneCache && globalThis.ParallaxRuntime) {
+    // PERF-DIAG KILL-SWITCH: ?nopar=1 in URL skips parallax entirely so we
+    // can isolate whether parallax is the hitch source. Reading once per
+    // draw is fine; no behavior change for normal users.
+    const skipParallax = /[?&]nopar=1\b/.test(location.search);
+
+    if (this.parallaxSceneCache && globalThis.ParallaxRuntime && !skipParallax) {
       const scene = this.parallaxProject.scene;
       const groundY = this.getGroundY();
 
@@ -1050,23 +1623,31 @@ export class Game {
     if (!this._frameSamples || this._frameSamples.length === 0) return;
     const ctx = this.context;
     // Aggregate over the rolling window.
-    let total = 0;
+    let totalFrame = 0;
+    let totalWall = 0;
     let maxFrame = 0;
+    let maxWall = 0;
     let maxUpdate = 0;
+    let maxStall = 0;
     const stepSums = { parallax: 0, ent: 0, player: 0, vig: 0 };
     const stepMax = { parallax: 0, ent: 0, player: 0, vig: 0 };
     for (const s of this._frameSamples) {
-      total += s.frameMs;
+      totalFrame += s.frameMs;
+      totalWall += s.frameTime;
       if (s.frameMs > maxFrame) maxFrame = s.frameMs;
+      if (s.frameTime > maxWall) maxWall = s.frameTime;
       if (s.updateMs > maxUpdate) maxUpdate = s.updateMs;
+      const stall = s.frameTime - s.frameMs;
+      if (stall > maxStall) maxStall = stall;
       for (const k of Object.keys(stepSums)) {
         stepSums[k] += s.stepMs[k] ?? 0;
         if ((s.stepMs[k] ?? 0) > stepMax[k]) stepMax[k] = s.stepMs[k];
       }
     }
     const n = this._frameSamples.length;
-    const avg = total / n;
-    const fps = n > 0 ? Math.min(120, Math.round(1000 / avg)) : 0;
+    const avgFrame = totalFrame / n;
+    // FPS uses wall-clock (what user sees), not draw duration.
+    const fps = n > 0 ? Math.min(120, Math.round(1000 / (totalWall / n))) : 0;
     // Pick the dominant step (largest avg) to highlight in yellow.
     let dominant = "parallax";
     let dominantAvg = stepSums.parallax / n;
@@ -1080,8 +1661,8 @@ export class Game {
     const lineH = 14;
     const boxX = pad;
     const boxY = pad;
-    const boxW = 200;
-    const boxH = lineH * 6 + pad * 2;
+    const boxW = 220;
+    const boxH = lineH * 8 + pad * 2;
     ctx.save();
     ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
     ctx.fillRect(boxX, boxY, boxW, boxH);
@@ -1098,8 +1679,13 @@ export class Game {
       ctx.fillText(label, tx, ty);
       ty += lineH;
     };
-    line("PERF · avg " + avg.toFixed(1) + "ms · " + fps + "fps", "", "#cfe7ff");
-    line("  max " + maxFrame.toFixed(1) + "ms · upd " + maxUpdate.toFixed(1) + "ms", "", "#fff");
+    // wall = average wall-clock gap between rAF ticks (what user sees).
+    // draw = our measured draw time. stall = wall - draw = browser
+    // stalling outside our draw (GPU sync, texture upload, GC). When
+    // stall is large and parallax is small, the hitch is browser-side
+    // and no amount of JS optimisation fixes it.
+    line("PERF · wall " + (totalWall / n).toFixed(1) + "ms · " + fps + "fps", "", "#cfe7ff");
+    line("  draw " + avgFrame.toFixed(1) + "ms · stall " + maxStall.toFixed(1) + "ms", "", "#fff");
     line("  parallax " + (stepSums.parallax / n).toFixed(1) + " (peak " + stepMax.parallax.toFixed(1) + ")",
       "", dominant === "parallax" ? "#ffd866" : "#fff");
     line("  entities " + (stepSums.ent / n).toFixed(1) + " (peak " + stepMax.ent.toFixed(1) + ")",
@@ -1108,6 +1694,24 @@ export class Game {
       "", dominant === "player" ? "#ffd866" : "#fff");
     line("  vignette " + (stepSums.vig / n).toFixed(1) + " (peak " + stepMax.vig.toFixed(1) + ")",
       "", dominant === "vig" ? "#ffd866" : "#fff");
+    // PERF-DIAG #6 — first-5s "red zone" peak. We track the worst frame
+    // seen since gameplayStartTime, until either 5s elapse OR the rolling
+    // window is past it. This lets us verify the warm-up actually
+    // eliminated the cold-start hitch without the long-term average
+    // masking it.
+    const now = performance.now();
+    const sinceStart = this.gameplayStartTime ? (now - this.gameplayStartTime) : Infinity;
+    if (this.state === "playing" && sinceStart < 5000 && this.state) {
+      // Update peak only during the red zone.
+      if (maxWall > (this._redZonePeakWall ?? 0)) this._redZonePeakWall = maxWall;
+      const redLabel = "  5s peak " + (this._redZonePeakWall ?? 0).toFixed(1) + "ms (red zone)";
+      const redColor = (this._redZonePeakWall ?? 0) > 30 ? "#ff8866" : "#88ff88";
+      line(redLabel, "", redColor);
+    } else {
+      line("  5s peak " + (this._redZonePeakWall ?? 0).toFixed(1) + "ms", "", "#aaa");
+    }
+    line("  wall peak " + maxWall.toFixed(1) + "ms · draw peak " + maxFrame.toFixed(1) + "ms",
+      "", maxStall > 30 ? "#ff8866" : "#aaa");
     ctx.restore();
   }
 }

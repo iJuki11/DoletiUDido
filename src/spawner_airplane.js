@@ -103,6 +103,8 @@ export class AirplaneManager {
       direction: -1,
       velocityX: -speed,
     });
+    // PERF-DIAG #6 — spawn marker. See [spawn] prsan in npc_manager.js.
+    console.log(`[spawn] airplane recipe=${key} t=${performance.now().toFixed(1)}`);
     this.instances.push({
       enemy,
       recipeKey: key,

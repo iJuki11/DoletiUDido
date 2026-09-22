@@ -63,6 +63,21 @@ window.addEventListener("keydown", dismissTapScreen, { once: true });
     console.error("[main] whenReady rejected unexpectedly:", error);
   }
 
+  // PERF-FIX #2 — GPU cache pre-warm. Runs while the loading screen is
+  // up so we eat the texture-upload hitch now and not during the first
+  // frame of gameplay. Single 2s timeout (Promise.race) — warmUpRender
+  // itself never rejects, so the timer only exists in this scope. If
+  // the warm-up exceeds 2s we move on; the worst case is the original
+  // hitch, no regression.
+  try {
+    await Promise.race([
+      game.warmUpRender(),
+      new Promise((resolve) => setTimeout(resolve, 2000)),
+    ]);
+  } catch (e) {
+    console.warn("[main] warmup threw unexpectedly:", e);
+  }
+
   // Optional: log the elapsed load time in the console so we can see at a
   // glance whether warm-cache skipping helped. Useful while we're tuning.
   const elapsed = performance.now() - loadingStart;

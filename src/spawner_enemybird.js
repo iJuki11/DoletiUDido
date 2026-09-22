@@ -257,6 +257,10 @@ export class BirdManager {
     // 5th bird repeats a random earlier offset (per "opcija β" — the
     // 5th shares with one of the first four).
     const xOffsets = this.pickXOffsets(formationSize);
+    // PERF-DIAG #6 — spawn marker. One stamp per formation (not per
+    // bird) because the formation is one logical spawn event. See the
+    // [spawn] prsan comment in npc_manager.js for the correlator story.
+    console.log(`[spawn] bird×${formationSize} t=${performance.now().toFixed(1)}`);
 
     // Build each bird instance from its slot + X offset.
     for (let i = 0; i < formationSize; i++) {
