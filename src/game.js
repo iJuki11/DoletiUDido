@@ -403,6 +403,9 @@ export class Game {
     // both feel smooth.
     const deltaTime = Math.min(frameTime / 1000, 0.1);
     this.lastTime = timestamp;
+    // PERF-DIAG: stamp frame start so the post-draw block can measure the
+    // full frame cost (update + draw). Cheap, no side effects.
+    this.frameStartMs = performance.now();
 
     // While the loading overlay is on screen, skip BOTH update and draw.
     // Without this guard the canvas would render the procedural fallback
@@ -416,9 +419,69 @@ export class Game {
       return;
     }
 
+    const updateStartMs = performance.now();
     this.update(deltaTime);
+    const updateMs = performance.now() - updateStartMs;
+    // PERF-DIAG #3: per-step timing. We stamp 4 anchors inside draw() via
+    // _perfStepStart markers that the renderer advances. Each step's cost
+    // surfaces in the jank log so we know which draw call is the culprit
+    // — update vs parallax vs entities vs player vs vignette. Cheap when
+    // the frame is fast (just two perf.now() calls); only printed when a
+    // frame blows the 25 ms budget.
     this.draw();
+    const frameMs = performance.now() - this.frameStartMs;
     requestAnimationFrame(this.frame);
+
+    // PERF-DIAG #2 (replaced): live on-canvas overlay + worst-of-N logging.
+    // The console.log spam was unreadable; now we (a) draw a tiny FPS +
+    // breakdown HUD in the top-left corner every frame so the user sees
+    // the metric in real time, and (b) only emit ONE console.warn per
+    // ~1 second for the worst frame observed in that window. That makes
+    // the log scannable instead of a wall of identical-looking lines.
+    const steps = this._perfSteps || {};
+    const stepMs = {
+      parallax: steps.parallax ?? 0,
+      ent: steps.ent ?? 0,
+      player: steps.player ?? 0,
+      vig: steps.vig ?? 0,
+    };
+    // Rolling stats — keep last 60 samples so the overlay shows a stable
+    // average and the worst-frame pick has a meaningful window.
+    if (!this._frameSamples) this._frameSamples = [];
+    this._frameSamples.push({ frameMs, updateMs, stepMs });
+    if (this._frameSamples.length > 60) this._frameSamples.shift();
+    // Draw the overlay LAST so it sits on top of everything (vignette
+    // already painted). We hand it a fresh context state so we don't
+    // pollute the canvas2d state for future frames.
+    this.drawPerfOverlay();
+    // Once per second, log the WORST frame in the last 60 — but ONLY
+    // when it actually blew the 60fps budget. If the worst frame was
+    // <=18ms the game is healthy and we stay silent. The moment a hitch
+    // happens we surface exactly one line per second with the broken-
+    // down step costs, so the console stays scannable instead of being
+    // a wall of identical 16.7ms noise.
+    this._perfLogTimer = (this._perfLogTimer || 0) + deltaTime;
+    if (this._perfLogTimer >= 1.0) {
+      this._perfLogTimer = 0;
+      let worst = this._frameSamples[0];
+      for (const s of this._frameSamples) {
+        if (s.frameMs > worst.frameMs) worst = s;
+      }
+      // Quiet when healthy. 18ms = 60fps budget + a hair of slack.
+      if (worst.frameMs > 18) {
+        const drawMs = worst.frameMs - worst.updateMs;
+        const s = worst.stepMs;
+        console.warn(
+          "[worst 1s]", worst.frameMs.toFixed(1) + "ms",
+          "upd=" + worst.updateMs.toFixed(1),
+          "draw=" + drawMs.toFixed(1),
+          "parallax=" + s.parallax.toFixed(1),
+          "ent=" + s.ent.toFixed(1),
+          "player=" + s.player.toFixed(1),
+          "vig=" + s.vig.toFixed(1),
+        );
+      }
+    }
   }
 
   recordFrameTime(frameTime) {
@@ -688,6 +751,15 @@ export class Game {
     const context = this.context;
     context.clearRect(0, 0, this.width, this.height);
 
+    // PERF-DIAG #3 — step anchors. reset() every frame so we don't leak
+    // stale values from previous frames into the jank log. Each step then
+    // writes its delta into this._perfSteps.<name>; the jank log in
+    // frame() reads them. We use perf.now() directly (not the cached
+    // frameStartMs) so each step measures its own slice, not the whole
+    // frame.
+    const steps = (this._perfSteps = {});
+    let stepStart = performance.now();
+
     if (this.parallaxSceneCache && globalThis.ParallaxRuntime) {
       const scene = this.parallaxProject.scene;
       const groundY = this.getGroundY();
@@ -746,6 +818,9 @@ export class Game {
       context.restore();
 
       context.restore();
+      // PERF-DIAG #3: parallax step ended (sky fill + ground strip + parallax render).
+      steps.parallax = performance.now() - stepStart;
+      stepStart = performance.now();
     } else {
       // Procedural fallback while the editor export loads or if it fails.
       this.drawSky(context);
@@ -754,12 +829,20 @@ export class Game {
       this.drawSkyline(context, 0.34, this.height * 0.68, "#737a7c", 68, 150);
       this.drawSkyline(context, 0.62, this.height * 0.79, "#50575a", 84, 210);
       this.drawGround(context);
+      // Fallback path includes procedural sky/clouds/skyline/ground —
+      // measure it under "parallax" since it occupies the same screen
+      // band, so the jank log still tells us "background draw was slow".
+      steps.parallax = performance.now() - stepStart;
+      stepStart = performance.now();
     }
 
     this.collectibles.draw(context);
     this.airplaneManager.draw(context);
     this.birdManager.draw(context);
     this.npcManager.draw(context);
+    // PERF-DIAG #3: entity step ended (collectibles + airplane + bird + NPC draws).
+    steps.ent = performance.now() - stepStart;
+    stepStart = performance.now();
     // Render the player only on flash-visible frames while invincible; the
     // collision effects overlay sits between the enemy and the player so
     // the burst reads on top of the plane and underneath the recoil.
@@ -767,9 +850,14 @@ export class Game {
     if (this.player.shouldDraw(drawNow)) {
       this.player.draw(context);
     }
+    // PERF-DIAG #3: player step ended.
+    steps.player = performance.now() - stepStart;
+    stepStart = performance.now();
     this.collisionEffects.draw(context);
     this.drawPopups(context);
     this.drawVignette(context);
+    // PERF-DIAG #3: vignette step ended (collision + popups + vignette).
+    steps.vig = performance.now() - stepStart;
 
     // Debug collider overlay — rendered LAST so outlines sit on top of
     // every sprite. Toggle the DEBUG_COLLIDERS flag at the top of the
@@ -951,6 +1039,76 @@ export class Game {
     gradient.addColorStop(1, "rgba(8, 11, 12, 0.16)");
     context.fillStyle = gradient;
     context.fillRect(0, 0, this.width, this.height);
+  }
+
+  // PERF-DIAG #2: live on-canvas overlay so the user can SEE the numbers
+  // while playing — no DevTools needed. Sits in the top-left corner, fixed
+  // 6 lines tall, dark backdrop with light text. Recomputed every frame
+  // from this._frameSamples (rolling 60-frame window = ~1s of history).
+  // Worst step name is highlighted yellow so you know where to look.
+  drawPerfOverlay() {
+    if (!this._frameSamples || this._frameSamples.length === 0) return;
+    const ctx = this.context;
+    // Aggregate over the rolling window.
+    let total = 0;
+    let maxFrame = 0;
+    let maxUpdate = 0;
+    const stepSums = { parallax: 0, ent: 0, player: 0, vig: 0 };
+    const stepMax = { parallax: 0, ent: 0, player: 0, vig: 0 };
+    for (const s of this._frameSamples) {
+      total += s.frameMs;
+      if (s.frameMs > maxFrame) maxFrame = s.frameMs;
+      if (s.updateMs > maxUpdate) maxUpdate = s.updateMs;
+      for (const k of Object.keys(stepSums)) {
+        stepSums[k] += s.stepMs[k] ?? 0;
+        if ((s.stepMs[k] ?? 0) > stepMax[k]) stepMax[k] = s.stepMs[k];
+      }
+    }
+    const n = this._frameSamples.length;
+    const avg = total / n;
+    const fps = n > 0 ? Math.min(120, Math.round(1000 / avg)) : 0;
+    // Pick the dominant step (largest avg) to highlight in yellow.
+    let dominant = "parallax";
+    let dominantAvg = stepSums.parallax / n;
+    for (const k of ["ent", "player", "vig"]) {
+      const v = stepSums[k] / n;
+      if (v > dominantAvg) { dominant = k; dominantAvg = v; }
+    }
+    // Layout: fixed-width box anchored to top-left. Use the device-pixel
+    // ratio already applied via setTransform — coords are in CSS pixels.
+    const pad = 8;
+    const lineH = 14;
+    const boxX = pad;
+    const boxY = pad;
+    const boxW = 200;
+    const boxH = lineH * 6 + pad * 2;
+    ctx.save();
+    ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(boxX + 0.5, boxY + 0.5, boxW - 1, boxH - 1);
+    ctx.font = "600 11px ui-monospace, Menlo, Consolas, monospace";
+    ctx.textBaseline = "top";
+    ctx.textAlign = "left";
+    const tx = boxX + pad;
+    let ty = boxY + pad;
+    const line = (label, value, color = "#fff") => {
+      ctx.fillStyle = color;
+      ctx.fillText(label, tx, ty);
+      ty += lineH;
+    };
+    line("PERF · avg " + avg.toFixed(1) + "ms · " + fps + "fps", "", "#cfe7ff");
+    line("  max " + maxFrame.toFixed(1) + "ms · upd " + maxUpdate.toFixed(1) + "ms", "", "#fff");
+    line("  parallax " + (stepSums.parallax / n).toFixed(1) + " (peak " + stepMax.parallax.toFixed(1) + ")",
+      "", dominant === "parallax" ? "#ffd866" : "#fff");
+    line("  entities " + (stepSums.ent / n).toFixed(1) + " (peak " + stepMax.ent.toFixed(1) + ")",
+      "", dominant === "ent" ? "#ffd866" : "#fff");
+    line("  player   " + (stepSums.player / n).toFixed(1) + " (peak " + stepMax.player.toFixed(1) + ")",
+      "", dominant === "player" ? "#ffd866" : "#fff");
+    line("  vignette " + (stepSums.vig / n).toFixed(1) + " (peak " + stepMax.vig.toFixed(1) + ")",
+      "", dominant === "vig" ? "#ffd866" : "#fff");
+    ctx.restore();
   }
 }
 
