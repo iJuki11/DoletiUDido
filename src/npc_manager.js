@@ -22,7 +22,13 @@ import {
   rollInterval,
   KONOBARI_VISIBLE_HEIGHT,
   KONOBARI_GRID_SLOTS_Y,
-} from "./difficulty_system.js";
+} from "./config_game.js";
+import {
+  getPrsanConfig,
+  getNidjoConfig,
+  getToniConfig,
+  getDebsConfig,
+} from "./config_npc.js";
 
 /**
  * Sub-manager for the "prsan" paratrooper NPC.
@@ -31,34 +37,25 @@ import {
  * instances. The outer NPCManager just delegates update/draw/reset here.
  */
 export class NPCPrsanManager {
-  constructor({
-    minInterval = 5,
-    maxInterval = 15,
-    spawnPadding = 80,
-    spawnAboveScreen = 60,
-    despawnBelow = 80,
-    minFallSpeed = 22,
-    maxFallSpeed = 42,
-    minDrift = -14,
-    maxDrift = 14,
-    gustChance = 0.35,
-    gustIntervalMin = 1.6,
-    gustIntervalMax = 4.2,
-  } = {}) {
-    // Settings are stored individually so each has a clear purpose — easier
-    // to tweak from the outside or feed from config later.
-    this.minInterval = minInterval;
-    this.maxInterval = maxInterval;
-    this.spawnPadding = spawnPadding;
-    this.spawnAboveScreen = spawnAboveScreen;
-    this.despawnBelow = despawnBelow;
-    this.minFallSpeed = minFallSpeed;
-    this.maxFallSpeed = maxFallSpeed;
-    this.minDrift = minDrift;
-    this.maxDrift = maxDrift;
-    this.gustChance = gustChance;
-    this.gustIntervalMin = gustIntervalMin;
-    this.gustIntervalMax = gustIntervalMax;
+  // Per-instance tuning lives in config_npc.js — this constructor pulls
+  // every parameter from there via getPrsanConfig(). No magic numbers.
+  constructor() {
+    const cfg = getPrsanConfig();
+    this.minInterval = cfg.intervalMin;
+    this.maxInterval = cfg.intervalMax;
+    this.spawnPadding = cfg.spawnPadding;
+    this.spawnAboveScreen = cfg.spawnAboveScreen;
+    this.despawnBelow = cfg.despawnBelow;
+    this.minFallSpeed = cfg.fallSpeedMin;
+    this.maxFallSpeed = cfg.fallSpeedMax;
+    this.minDrift = cfg.driftMin;
+    this.maxDrift = cfg.driftMax;
+    this.gustChance = cfg.gustChance;
+    this.gustIntervalMin = cfg.gustIntervalMin;
+    this.gustIntervalMax = cfg.gustIntervalMax;
+    // Base scale + jitter range, sampled per spawn for population variety.
+    this._baseScale = cfg.scale;
+    this._scaleJitter = cfg.scaleJitter ?? 0;
 
     this.instances = [];
 
@@ -88,7 +85,8 @@ export class NPCPrsanManager {
     const y = -this.spawnAboveScreen;
     const fallSpeed = this.minFallSpeed + Math.random() * (this.maxFallSpeed - this.minFallSpeed);
     const drift = this.minDrift + Math.random() * (this.maxDrift - this.minDrift);
-    const scale = 0.55 + Math.random() * 0.15;
+    // Scale sampled per spawn so the population doesn't look like clones.
+    const scale = this._baseScale + Math.random() * this._scaleJitter;
     // PERF-DIAG removed — game.js _spawnLog (manager.instance length diff
     // around the update call) already records spawn timestamps. The
     // explicit console.log here was a duplicate that fired on every
@@ -177,18 +175,16 @@ export class NPCPrsanManager {
  * (WHEEL_RADIUS * scale, matching NPCNidjo's coordinate convention).
  */
 export class NPCNidjoManager {
-  constructor({
-    minInterval = 8,
-    maxInterval = 18,
-    spawnMargin = 120,
-    minSpeed = 120,
-    maxSpeed = 180,
-  } = {}) {
-    this.minInterval = minInterval;
-    this.maxInterval = maxInterval;
-    this.spawnMargin = spawnMargin;
-    this.minSpeed = minSpeed;
-    this.maxSpeed = maxSpeed;
+  // Pulls every spawn-tuning parameter from config_npc.js via
+  // getNidjoConfig(). Nothing hard-coded.
+  constructor() {
+    const cfg = getNidjoConfig();
+    this.minInterval = cfg.intervalMin;
+    this.maxInterval = cfg.intervalMax;
+    this.spawnMargin = cfg.spawnMargin;
+    this.minSpeed = cfg.speedMin;
+    this.maxSpeed = cfg.speedMax;
+    this._baseScale = cfg.scale;
 
     this.instances = [];
     this.scheduleNext();
@@ -206,7 +202,7 @@ export class NPCNidjoManager {
    * Returns the new instance so callers (tests, debug overlays) can grab it.
    */
   spawnOne(width, groundY) {
-    const scale = 0.55;
+    const scale = this._baseScale;
     // -1 or +1 with equal probability — alternating traffic both ways.
     const direction = Math.random() < 0.5 ? -1 : 1;
     const speed = this.minSpeed + Math.random() * (this.maxSpeed - this.minSpeed);
@@ -291,18 +287,16 @@ export class NPCNidjoManager {
  * offset is positive, unlike Nidjo's `groundY - 31 * scale`).
  */
 export class NPCToniManager {
-  constructor({
-    minInterval = 10,
-    maxInterval = 22,
-    spawnMargin = 140,
-    minSpeed = 90,
-    maxSpeed = 150,
-  } = {}) {
-    this.minInterval = minInterval;
-    this.maxInterval = maxInterval;
-    this.spawnMargin = spawnMargin;
-    this.minSpeed = minSpeed;
-    this.maxSpeed = maxSpeed;
+  // Pulls every spawn-tuning parameter from config_npc.js via
+  // getToniConfig(). Nothing hard-coded.
+  constructor() {
+    const cfg = getToniConfig();
+    this.minInterval = cfg.intervalMin;
+    this.maxInterval = cfg.intervalMax;
+    this.spawnMargin = cfg.spawnMargin;
+    this.minSpeed = cfg.speedMin;
+    this.maxSpeed = cfg.speedMax;
+    this._baseScale = cfg.scale;
 
     this.instances = [];
     this.scheduleNext();
@@ -320,7 +314,7 @@ export class NPCToniManager {
    * Returns the new instance so callers (tests, debug overlays) can grab it.
    */
   spawnOne(width, groundY) {
-    const scale = 0.70;
+    const scale = this._baseScale;
     // -1 or +1 with equal probability — alternating traffic both ways.
     const direction = Math.random() < 0.5 ? -1 : 1;
     const speed = this.minSpeed + Math.random() * (this.maxSpeed - this.minSpeed);
@@ -402,13 +396,13 @@ export class NPCToniManager {
  * left across the screen. On player overlap it grants +1 HP via the
  * onPlayerHit callback — but the instance stays alive and keeps walking;
  * a per-instance cooldown (`_hitCooldownRemaining`, length from
- * difficulty_system.konobariHitCooldown) prevents repeated heals from a
+ * config_game.konobariHitCooldown) prevents repeated heals from a
  * single NPC within a short window.
  *
  * Direction is fixed at -1 (right→left). Speed, scale and interval are
  * driven by the active `levelConfig` (passed in via `reset()` from the
  * outer Game), not local constants — so future tuning only touches
- * `difficulty_system.js`.
+ * `config_game.js` (the level-keyed buckets in DIFFICULTY_LEVELS).
  *
  * Despawn uses getBounds() so the sprite vanishes only after its full AABB
  * has cleared the nearest edge (same standard as NPCNidjoManager /
@@ -579,10 +573,9 @@ export class NPCKonobariManager {
     for (const konobar of this.instances) {
       konobar.draw(context);
     }
-    // Debug collider overlay — only when window.__DEBUG_KONOBARI_BOXES
-    // is explicitly set to true (e.g. from the DevTools console). Off by
-    // default so it costs nothing in normal play.
-    if (typeof window !== "undefined" && window.__DEBUG_KONOBARI_BOXES === true) {
+    // Legacy: window.__DEBUG_KONOBARI_BOXES (single-flag era) i dalje radi
+    // kao OR s novim isKonobariBoxes ako je netko postavio prije.
+    if (window.__DEBUG?.isKonobariBoxes) {
       for (const konobar of this.instances) {
         const b = konobar.getBounds();
         context.save();
@@ -628,12 +621,19 @@ export class NPCKonobariManager {
  * NPCToniManager after their despawn-margin fix).
  */
 export class NPCDebsManager {
+  // Spawn tuning (interval, scale, speed, margin) lives in config_npc.js.
+  // The konobari-style levelConfig is NOT used here — Debs is an
+  // atmospheric NPC that doesn't react to difficulty.
   constructor({
-    spawnMargin = 120,
-    levelConfig = getLevelConfig(DIFFICULTY.EASY),
+    spawnMargin = getDebsConfig().spawnMargin,
   } = {}) {
-    this.spawnMargin = spawnMargin;
-    this.levelConfig = levelConfig;
+    const cfg = getDebsConfig();
+    this.spawnMargin = spawnMargin ?? cfg.spawnMargin;
+    this._baseScale = cfg.scale;
+    this._speedMin = cfg.speedMin;
+    this._speedMax = cfg.speedMax;
+    this._intervalMin = cfg.intervalMin;
+    this._intervalMax = cfg.intervalMax;
 
     this.instances = [];
     this.scheduleNext();
@@ -641,14 +641,7 @@ export class NPCDebsManager {
 
   /** Roll a random duration until the next spawn attempt. */
   scheduleNext() {
-    if (!this.levelConfig?.debsEnabled) {
-      this.nextSpawn = 7;
-      return;
-    }
-    this.nextSpawn = rollInterval(
-      this.levelConfig?.debsIntervalMin ?? 12,
-      this.levelConfig?.debsIntervalMax ?? 22,
-    );
+    this.nextSpawn = rollInterval(this._intervalMin, this._intervalMax);
   }
 
   /**
@@ -657,16 +650,10 @@ export class NPCDebsManager {
    * Returns the new instance so callers (tests, debug overlays) can grab it.
    */
   spawnOne(width, height) {
-    // Pull scale and speed from levelConfig if present, otherwise fall back
-    // to reasonable defaults so the NPC works even without a difficulty-system
-    // entry for it. Matches NPCKonobariManager's tolerant reading style.
-    const scale = this.levelConfig?.debsScale ?? 0.3;
+    const scale = this._baseScale;
     // -1 or +1 with equal probability — alternating traffic both ways.
     const direction = Math.random() < 0.5 ? -1 : 1;
-    const speed = rollInterval(
-      this.levelConfig?.debsMinSpeed ?? 90,
-      this.levelConfig?.debsMaxSpeed ?? 150,
-    );
+    const speed = rollInterval(this._speedMin, this._speedMax);
     // Spawn just off the appropriate edge with a small margin so the
     // sprite doesn't pop into existence fully on-screen.
     const x = direction > 0
@@ -723,10 +710,9 @@ export class NPCDebsManager {
   }
 
   /** Wipe all instances and reset timers — called on game restart. */
-  reset(levelConfig = getLevelConfig(DIFFICULTY.EASY)) {
+  reset() {
     this.instances = [];
     this.timer = 0;
-    this.levelConfig = levelConfig;
     this.scheduleNext();
   }
 }
@@ -781,13 +767,16 @@ export class NPCManager {
     this.Debs.draw(context);
   }
 
-  /** Forward the levelConfig so konobari and debs can re-tune themselves
-   * when the player restarts the game (or the level changes mid-session). */
+  /** Forward the levelConfig so konobari can re-tune itself when the
+   * player restarts the game (or the level changes mid-session). Prsan,
+   * Nidjo, Toni and Debs read from config_npc.js — they don't need to
+   * receive anything here, but we still call reset() to wipe active
+   * instances and reset spawn timers. */
   reset(levelConfig) {
     this.Prsan.reset();
     this.Nidjo.reset();
     this.Toni.reset();
     this.Konobari.reset(levelConfig);
-    if (this.Debs) this.Debs.reset(levelConfig);
+    if (this.Debs) this.Debs.reset();
   }
 }

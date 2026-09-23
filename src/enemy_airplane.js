@@ -30,7 +30,7 @@ function loadHead() {
 
 /** A code-drawn airplane with a transparent portrait, using the Player draw/update API. */
 export class EnemyAirplane {
-  constructor(x, y, { scale = 0.8, direction = 1, velocityX = 0 } = {}) {
+  constructor(x, y, { scale = 0.8, direction = 1, velocityX = 0, headImage = null } = {}) {
     this.x = x;
     this.y = y;
     this.scale = scale;
@@ -41,9 +41,9 @@ export class EnemyAirplane {
     this.propellerPhase = 0;
     this.throttle = 1;
     this.bobAmount = 3;
-    this.head = null;
+    this.head = headImage;
     this.loadError = null;
-    this.ready = loadHead().then((image) => {
+    this.ready = (headImage ? Promise.resolve(headImage) : loadHead()).then((image) => {
       this.head = image;
       return true;
     }, (error) => {

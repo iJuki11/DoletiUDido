@@ -141,10 +141,6 @@ export class Player {
   }
 
   shouldDraw(nowSeconds) {
-    if (!this.parts) {
-      return false;
-    }
-
     if (nowSeconds < this.invincibleUntil) {
       if (nowSeconds < this.invincibilityFlashStart) {
         this.flashVisible = true;
@@ -422,15 +418,44 @@ export class Player {
   // --------------------------------------------------
 
   draw(context) {
-    if (!this.parts) {
-      return;
-    }
-
     const now =
       performance.now() / 1000;
 
     const opacity =
       this.getOpacity(now);
+
+    if (!this.parts) {
+      // Keep the player visible and playable if the SVG cannot be loaded.
+      context.save();
+      context.translate(this.x, this.y);
+      context.rotate(this.rotation);
+      context.globalAlpha = opacity;
+      context.fillStyle = "#747f85";
+      context.beginPath();
+      context.ellipse(0, 0, 25, 20, 0, 0, Math.PI * 2);
+      context.fill();
+      context.fillStyle = "#56636a";
+      context.beginPath();
+      context.ellipse(-5, 6, 14, 9, -0.25, 0, Math.PI * 2);
+      context.fill();
+      context.fillStyle = "#e5a44c";
+      context.beginPath();
+      context.moveTo(21, -1);
+      context.lineTo(36, 5);
+      context.lineTo(20, 9);
+      context.closePath();
+      context.fill();
+      context.fillStyle = "#fff";
+      context.beginPath();
+      context.arc(11, -8, 4, 0, Math.PI * 2);
+      context.fill();
+      context.fillStyle = "#222";
+      context.beginPath();
+      context.arc(12, -8, 1.5, 0, Math.PI * 2);
+      context.fill();
+      context.restore();
+      return;
+    }
 
     context.save();
 

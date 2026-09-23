@@ -28,6 +28,41 @@ export class AudioBus {
     // One-shot SFX pool — we keep the most recent element around so we
     // don't allocate an Audio object on every single tap.
     this.jumpElement = null;
+
+    // Fetch ambient clips during loading. Their first playback is started
+    // silently by the first user gesture, before an enemy can appear.
+    this.prepareAmbient();
+  }
+
+  prepareAmbient() {
+    if (typeof window === "undefined" || typeof Audio !== "function") return;
+    for (const [key, property] of [["airplane", "airplaneElement"], ["bird", "birdElement"]]) {
+      const cfg = this.config.ambient[key];
+      if (!cfg) continue;
+      let element = this[property];
+      if (!element) {
+        element = new Audio();
+        element.loop = cfg.loop !== false;
+        element.preload = "auto";
+        element.volume = 0;
+        this[property] = element;
+      }
+      const url = new URL(cfg.src, window.location.href).href;
+      if (element.src !== url) {
+        element.src = cfg.src;
+        element.load?.();
+      }
+    }
+  }
+
+  primeAmbient() {
+    this.prepareAmbient();
+    for (const element of [this.airplaneElement, this.birdElement]) {
+      if (!element || element.paused === false) continue;
+      element.volume = 0;
+      const promise = element.play();
+      if (promise && typeof promise.catch === "function") promise.catch(() => {});
+    }
   }
 
   onUserInput() {
@@ -140,12 +175,12 @@ export class AudioBus {
     if (typeof window === "undefined") return;
     const cfg = this.config.music[key];
     if (!cfg) {
-      console.warn(`[AudioBus] playMusic: unknown key "${key}"`);
+      if (window.__DEBUG?.isAudio) console.warn(`[AudioBus] playMusic: unknown key "${key}"`);
       return;
     }
     const volume = volumeOverride !== undefined ? volumeOverride : cfg.volume;
     if (volume < 0 || volume > 1) {
-      console.warn(`[AudioBus] playMusic: volume ${volume} for "${key}" is out of range [0,1] — will be clamped`);
+      if (window.__DEBUG?.isAudio) console.warn(`[AudioBus] playMusic: volume ${volume} for "${key}" is out of range [0,1] — will be clamped`);
     }
     if (!this.musicElement) {
       this.musicElement = new Audio();
@@ -184,21 +219,15 @@ export class AudioBus {
     if (typeof window === "undefined") return;
     const cfg = this.config.ambient[key];
     if (!cfg) {
-      console.warn(`[AudioBus] startAirplane: unknown key "${key}"`);
+      if (window.__DEBUG?.isAudio) console.warn(`[AudioBus] startAirplane: unknown key "${key}"`);
       return;
     }
-    if (!this.airplaneElement) {
-      this.airplaneElement = new Audio();
-      this.airplaneElement.loop = cfg.loop !== false;
-      this.airplaneElement.preload = "auto";
-      this.airplaneElement.volume = 0;
-    }
-    if (this.airplaneElement.src !== new URL(cfg.src, window.location.href).href) {
-      this.airplaneElement.src = cfg.src;
-    }
+    this.prepareAmbient();
     this.airplaneMaxVolume = Math.max(0, Math.min(1, cfg.maxVolume));
-    const p = this.airplaneElement.play();
-    if (p && typeof p.catch === "function") p.catch(() => {});
+    if (this.airplaneElement?.paused !== false) {
+      const p = this.airplaneElement?.play();
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    }
   }
 
   // volume from 0..1 — call every frame with the plane's x position; the
@@ -222,6 +251,10 @@ export class AudioBus {
     this.airplaneElement.volume = 0;
   }
 
+  silenceAirplane() {
+    if (this.airplaneElement) this.airplaneElement.volume = 0;
+  }
+
   // ---- Bird SFX (positional loop) ------------------------------
   // The crow uses the same looping-volume pattern as the airplane — a
   // separate Audio element so airplane and bird can play simultaneously.
@@ -229,21 +262,15 @@ export class AudioBus {
     if (typeof window === "undefined") return;
     const cfg = this.config.ambient[key];
     if (!cfg) {
-      console.warn(`[AudioBus] startBird: unknown key "${key}"`);
+      if (window.__DEBUG?.isAudio) console.warn(`[AudioBus] startBird: unknown key "${key}"`);
       return;
     }
-    if (!this.birdElement) {
-      this.birdElement = new Audio();
-      this.birdElement.loop = cfg.loop !== false;
-      this.birdElement.preload = "auto";
-      this.birdElement.volume = 0;
-    }
-    if (this.birdElement.src !== new URL(cfg.src, window.location.href).href) {
-      this.birdElement.src = cfg.src;
-    }
+    this.prepareAmbient();
     this.birdMaxVolume = Math.max(0, Math.min(1, cfg.maxVolume));
-    const p = this.birdElement.play();
-    if (p && typeof p.catch === "function") p.catch(() => {});
+    if (this.birdElement?.paused !== false) {
+      const p = this.birdElement?.play();
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    }
   }
 
   updateBirdSound(birdX, playerX, canvasWidth) {
@@ -262,5 +289,9 @@ export class AudioBus {
     this.birdElement.pause();
     this.birdElement.currentTime = 0;
     this.birdElement.volume = 0;
+  }
+
+  silenceBird() {
+    if (this.birdElement) this.birdElement.volume = 0;
   }
 }

@@ -4,7 +4,7 @@ import {
   getLevel,
   getLevelConfig,
   rollInterval,
-} from "./difficulty_system.js";
+} from "./config_game.js";
 
 /**
  * Configuration recipes for crow enemy variants. To add a new variant
@@ -106,6 +106,7 @@ export class BirdManager {
     // reuse the resolved object via this.partsCache.
     this.partsPromise = null;
     this.partsCache = null;
+    this.partsRetryAt = 0;
     this.scheduleNext(levelConfig);
   }
 
@@ -113,9 +114,8 @@ export class BirdManager {
     this.instances = [];
     this.timer = 0;
     this.scheduleNext(levelConfig);
-    // Stop the bird SFX in case an instance was active when the game
-    // restarted; without this the sound would keep looping.
-    this.audio?.stopBird?.();
+    // Keep the prestarted loop decoded, but silence it until birds appear.
+    this.audio?.silenceBird?.();
   }
 
   scheduleNext(levelConfig = getLevelConfig(DIFFICULTY.EASY)) {
@@ -140,9 +140,10 @@ export class BirdManager {
           return parts;
         })
         .catch((err) => {
-          // Don't poison the cache — allow a later spawn attempt to retry
-          // the fetch (matches the airplane head-load retry pattern).
+          // Retry later without issuing a failed fetch on every frame.
           this.partsPromise = null;
+          this.partsRetryAt = performance.now() + 3000;
+          // Intentionally not gated — runtime error
           console.error("Failed to load enemy bird SVG parts:", err);
           return null;
         });
@@ -295,7 +296,7 @@ export class BirdManager {
     this.audio?.startBird?.("bird");
     // Heavy debug payload — full object literal every formation. Only log
     // when explicitly opted in via __game.debug.bird = true.
-    if (globalThis.__game?.debug?.bird) {
+    if (window.__DEBUG?.isBird) {
       console.log("[bird] formation spawned", {
         size: formationSize,
         slots,
@@ -314,10 +315,12 @@ export class BirdManager {
 
     if (this.instances.length === 0) {
       if (this.timer >= this.nextSpawn) {
+        if (!this.partsCache) {
+          if (performance.now() >= this.partsRetryAt) this.ensureParts();
+          return;
+        }
         this.timer = 0;
         this.scheduleNext(levelConfig);
-        // Kick off parts load lazily — first spawn will wait for them.
-        this.ensureParts();
         this.spawnFormation(width, height, levelConfig);
       }
       return;
@@ -354,11 +357,11 @@ export class BirdManager {
         );
         if (overlaps) {
           // Bird damage stays 1 per spec — only the airplane's damage is tuned
-          // per difficulty level (see difficulty_system.js).
+          // per difficulty level (see config_game.js).
           this.player?.takeDamage?.(entry.config.damage ?? 1);
           entry.damageCooldown = 0.6;
           this.onPlayerHit?.(entry.bird.x, entry.bird.y, entry.config);
-          if (globalThis.__game?.debug?.bird) {
+          if (window.__DEBUG?.isBird) {
             console.log("[bird] hit player, damage=", entry.config.damage ?? 1);
           }
         }
@@ -389,7 +392,7 @@ export class BirdManager {
     // If the formation is fully gone, stop the SFX so it doesn't keep
     // looping with volume = 0 forever.
     if (removedAny && this.instances.length === 0) {
-      this.audio?.stopBird?.();
+      this.audio?.silenceBird?.();
     }
   }
 
@@ -414,5 +417,3 @@ export default BirdManager;
 //Zadnja (5.) ponavlja neki od 4 već korištena
 //Ili neka druga logika (npr. uvijek srednja)?
 //Javi A/B/C + pravilo ponavljanja pa kod pišem.
-
-

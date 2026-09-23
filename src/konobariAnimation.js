@@ -5,6 +5,7 @@ const COLUMNS = 6;
 const FRAME_COUNT = 30;
 const ORIGIN = {x: 192, y: 418};
 const cache = new Map();
+const frameCache = new Map();
 
 function loadSheet(url) {
   if (!cache.has(url)) {
@@ -39,6 +40,30 @@ function loadSheet(url) {
   return cache.get(url);
 }
 
+function loadFrames(url) {
+  if (!frameCache.has(url)) {
+    frameCache.set(url, loadSheet(url).then(async (sheet) => {
+      if (typeof createImageBitmap !== "function") return null;
+      const frames = [];
+      try {
+        for (let frame = 0; frame < FRAME_COUNT; frame++) {
+          const sx = frame % COLUMNS * FRAME_WIDTH;
+          const sy = Math.floor(frame / COLUMNS) * FRAME_HEIGHT;
+          frames.push(await createImageBitmap(sheet, sx, sy, FRAME_WIDTH, FRAME_HEIGHT));
+        }
+        return frames;
+      } catch (error) {
+        for (const frame of frames) frame.close?.();
+        return null; // The original sheet remains a working fallback.
+      }
+    }).catch((error) => {
+      frameCache.delete(url);
+      throw error;
+    }));
+  }
+  return frameCache.get(url);
+}
+
 /**
  * Konobari sprite-sheet animator — 30 transparent pre-rendered frames from
  * assets/images/fabo_i_pacho.png. Replaces the original OriginalTandem
@@ -50,6 +75,7 @@ function loadSheet(url) {
  */
 export class KonobariAnimation {
   static preload(url = SHEET_URL) { return loadSheet(url); }
+  static preloadFrames(url = SHEET_URL) { return loadFrames(url); }
 
   constructor(x, y, {
     scale = 0.5, direction = -1, velocityX = 0,
@@ -62,8 +88,10 @@ export class KonobariAnimation {
     this.fps = fps; this.animationSpeed = animationSpeed; this.playing = playing;
     this.time = 0; this.frame = 0; this._framePhase = 0;
     this.sheet = null; this.loadError = null;
-    this.ready = loadSheet(sheetUrl).then(image => {
+    this.frames = null;
+    this.ready = Promise.all([loadSheet(sheetUrl), loadFrames(sheetUrl)]).then(([image, frames]) => {
       this.sheet = image;
+      this.frames = frames;
       return true;
     }, error => {
       this.loadError = error;
@@ -170,8 +198,12 @@ export class KonobariAnimation {
     ctx.translate(this.x, this.y);
     ctx.rotate(this.rotation);
     ctx.scale(this.scale * -this.direction, this.scale);
-    ctx.drawImage(this.sheet, sx, sy, FRAME_WIDTH, FRAME_HEIGHT,
-      -ORIGIN.x, -ORIGIN.y, FRAME_WIDTH, FRAME_HEIGHT);
+    if (this.frames) {
+      ctx.drawImage(this.frames[this.frame], -ORIGIN.x, -ORIGIN.y, FRAME_WIDTH, FRAME_HEIGHT);
+    } else {
+      ctx.drawImage(this.sheet, sx, sy, FRAME_WIDTH, FRAME_HEIGHT,
+        -ORIGIN.x, -ORIGIN.y, FRAME_WIDTH, FRAME_HEIGHT);
+    }
     ctx.restore();
   }
 }

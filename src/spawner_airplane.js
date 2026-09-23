@@ -3,7 +3,7 @@ import {
   DIFFICULTY,
   getLevelConfig,
   rollInterval,
-} from "./difficulty_system.js";
+} from "./config_game.js";
 
 /**
  * Configuration recipes for prsan enemy variants. To add a new variant
@@ -12,7 +12,7 @@ import {
  * own score/health/audio callbacks without rewriting the manager.
  *
  * `damage` is overridden at spawn-time by the active difficulty level
- * (see difficulty_system.js — currently a flat 2 across all levels that
+ * (see config_game.js — currently a flat 2 across all levels that
  * spawn the airplane). Keep this default in sync if you ever split damage
  * per-recipe.
  */
@@ -36,8 +36,9 @@ export const AIRPLANE_RECIPES = Object.freeze({
  * and reading them inside `spawnOne` / the active-instance branch.
  */
 export class AirplaneManager {
-  constructor({ audio, player, recipes = AIRPLANE_RECIPES, minInterval = 10, maxInterval = 15, spawnMarginTop = 80, spawnMarginBottom = 80, onPlayerHit, levelConfig = getLevelConfig(DIFFICULTY.EASY) } = {}) {
+  constructor({ audio, assets, player, recipes = AIRPLANE_RECIPES, minInterval = 10, maxInterval = 15, spawnMarginTop = 80, spawnMarginBottom = 80, onPlayerHit, levelConfig = getLevelConfig(DIFFICULTY.EASY) } = {}) {
     this.audio = audio;
+    this.assets = assets;
     this.player = player;
     this.recipes = recipes;
     this.minInterval = minInterval;
@@ -60,9 +61,8 @@ export class AirplaneManager {
     this.instances = [];
     this.timer = 0;
     this.scheduleNext(levelConfig);
-    // Stop the airplane SFX in case an instance was active when the
-    // game restarted; without this the sound would keep looping.
-    this.audio?.stopAirplane?.();
+    // Keep the prestarted loop decoded, but silence it until a plane appears.
+    this.audio?.silenceAirplane?.();
   }
 
   scheduleNext(levelConfig = getLevelConfig(DIFFICULTY.EASY)) {
@@ -102,6 +102,7 @@ export class AirplaneManager {
       scale: config.scale,
       direction: -1,
       velocityX: -speed,
+      headImage: this.assets?.cache?.get("airplane-head"),
     });
     // PERF-DIAG removed — game.js _spawnLog records the spawn; this
     // console.log was a duplicate.
@@ -118,7 +119,7 @@ export class AirplaneManager {
     // Kick off the looping airplane SFX — volume is updated every frame in
     // update() based on distance from the centre of the screen.
     this.audio?.startAirplane?.("airplane");
-    if (globalThis.__game?.debug?.npc) {
+    if (window.__DEBUG?.isAirplane) {
       console.log("[airplane] spawned", { x: enemy.x, y, recipe: key, speed: speed.toFixed(0) });
     }
   }
@@ -153,7 +154,7 @@ export class AirplaneManager {
     // Despawn once fully off the left edge.
     if (entry.enemy.x < -200) {
       this.instances.shift();
-      this.audio?.stopAirplane?.();
+      this.audio?.silenceAirplane?.();
       return;
     }
 
@@ -180,7 +181,7 @@ export class AirplaneManager {
         // Fire the gameplay-side callback: visual effect, sound, and
         // the 2-second player invincibility window live there.
         this.onPlayerHit?.(entry.enemy.x, entry.enemy.y, entry.config);
-        if (globalThis.__game?.debug?.npc) {
+        if (window.__DEBUG?.isAirplane) {
           console.log("[airplane] hit player, damage=", entry.damage ?? 2);
         }
       }

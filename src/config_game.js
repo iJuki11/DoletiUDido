@@ -1,8 +1,16 @@
-// Difficulty system — single source of truth for spawn cadence, formation
-// size, and per-enemy damage. Other managers (spawner_enemybird.js,
+// Game-level tuning — single source of truth for difficulty thresholds,
+// per-level spawn cadence (birds + airplanes), per-enemy damage, and the
+// konobari-friendly-NPC defaults. Other managers (spawner_enemybird.js,
 // spawner_airplane.js) read from this module instead of hard-coding their
 // own intervals — that way a future "4-line override" only needs to
 // touch one file.
+//
+// Renamed from `difficulty_system.js` on 2026-09-23 — same responsibilities,
+// new filename to better match the new `config_npc.js` family. All callers
+// updated to import from this file.
+//
+// NPCs that are NOT keyed off the difficulty level (Prsan, Nidjo, Toni,
+// Debs) live in `config_npc.js` instead. Don't add their tuning here.
 
 // Konobari friendly NPC — visual + collision footprint. Slot grid je
 // baziran na VISIBLE_HEIGHT (Y spacing); VISIBLE_WIDTH koristi se kao

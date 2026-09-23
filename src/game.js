@@ -4,7 +4,7 @@ import { AssetLoader } from "./assets.js";
 import { AudioBus } from "./audio.js";
 import { audioConfig } from "./audioConfig.js";
 import { AirplaneManager, BirdManager } from "./enemies.js";
-import { DIFFICULTY, getLevel, getLevelConfig } from "./difficulty_system.js";
+import { DIFFICULTY, getLevel, getLevelConfig } from "./config_game.js";
 import { NPCManager } from "./npc_manager.js";
 import { CollisionEffects, COLLISION_EFFECT_DURATION } from "./collision_effects.js";
 import { SKIP_LAYER_IDS, ZOOM_BACKGROUND } from "./parallax-background.js";
@@ -24,12 +24,6 @@ const STATE = Object.freeze({
   GAME_OVER: "game-over",
 });
 
-// Debug overlay — set to false to hide every collider outline drawn by
-// Game.drawColliders(). To REMOVE the overlay entirely from production
-// code: delete this constant AND delete the call to drawColliders() in
-// frame() AND delete the drawColliders() method below.
-const DEBUG_COLLIDERS = false;
-
 export class Game {
   constructor(canvas, input, ui, options = {}) {
     this.canvas = canvas;
@@ -41,10 +35,9 @@ export class Game {
     // GameUI.updateProgress() so the loading screen shows real progress.
     this.onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
     this.state = STATE.START;
-    // PERF-FIX — debug switch bag. main.js exposes this on globalThis so
-    // console-driven toggling works the same as before, but every gated
-    // log defaults to OFF in production (no per-frame console noise).
-    this.debug = { parallax: false };
+    // Keep the legacy __game.debug handle as a shared reference so existing
+    // test pages can still toggle the centralized debug flags.
+    this.debug = window.__DEBUG;
     this.width = 0;
     this.height = 0;
     this.pixelRatio = 1;
@@ -54,6 +47,7 @@ export class Game {
     this.speed = 170;
     this.worldX = 0;
     this.lastTime = 0;
+    this.lastRenderedTime = 0;
     this.pauseTimestamp = 0;
     this.frameTimes = [];
     this.frameTiming = { average: 0, stdDev: 0, samples: 0, withinBudget: true };
@@ -61,6 +55,7 @@ export class Game {
     this.popups = [];
     this.cachedGroundY = 0;
     this.cachedSkyGradient = null;
+    this.cachedVignetteGradient = null;
     this.cachedSkyKey = "";
     this.coffees = 0;
     // Difficulty sticky flag — once the player crosses into Hard we never
@@ -81,6 +76,7 @@ export class Game {
     // Bird SVG parts (body, wing, hat, leftLeg, rightLeg) are loaded once
     // and handed to Player. Player.draw() skips frames until parts arrive.
     this.player = new Player(90, 300, null);
+    this.birdLoadFailed = false;
     this.assets
       .loadSvgParts("./assets/images/bird/bird_image.svg", [
         "body",
@@ -90,11 +86,15 @@ export class Game {
         "rightLeg",
       ])
       .then((parts) => {
+        if (!parts?.body || !parts?.wing) {
+          throw new Error("Bird SVG is missing a drawable body or wing");
+        }
         this.player.parts = parts;
       })
       .catch((err) => {
-        // Bird won't render until this resolves. Log once so the failure
-        // doesn't get swallowed silently.
+        this.birdLoadFailed = true;
+        // Intentionally always visible: a failed bird asset is a critical
+        // runtime error, not optional debug output.
         console.error("Failed to load bird SVG parts:", err);
       });
     // Player owns its own HP and invincibility window. takeDamage() on
@@ -112,6 +112,7 @@ export class Game {
     const initialLevelConfig = this.getLevelConfig();
     this.airplaneManager = new AirplaneManager({
       audio: this.audio,
+      assets: this.assets,
       player: this.player,
       levelConfig: initialLevelConfig,
       // Called the moment a prsan hit is accepted. Triggers the visual
@@ -200,6 +201,7 @@ export class Game {
       // Swallow here so the rejection doesn't blow up the caller. main.js
       // polls `game.parallaxLoadFailed` (via whenReady) to learn about the
       // failure and decide whether to show the offline toast.
+      // Intentionally always visible: parallax loading is core runtime state.
       console.warn("[parallax] background load failed:", error);
     });
 
@@ -221,6 +223,7 @@ export class Game {
     window.addEventListener("resize", this.resize);
     document.addEventListener("visibilitychange", () => {
       this.lastTime = performance.now();
+      this.lastRenderedTime = this.lastTime;
     });
 
     this.resize();
@@ -243,12 +246,17 @@ export class Game {
       // share a single source of truth.
       window.__game.setFpsCap = (fps) => {
         const applied = this.fpsLogic.setFps(fps);
-        console.log("FPS cap:", applied === 0 ? "uncapped" : applied + "fps");
+        this.lastRenderedTime = performance.now();
+        if (window.__DEBUG?.isCheatsheet) {
+          console.log("FPS cap:", applied === 0 ? "uncapped" : applied + "fps");
+        }
         return applied;
       };
       window.__game.forceDifficulty = (level) => {
         if (!Object.values(DIFFICULTY).includes(level)) {
-          console.warn(`Unknown difficulty "${level}". Valid: ${Object.values(DIFFICULTY).join(", ")}`);
+          if (window.__DEBUG?.isCheatsheet) {
+            console.warn(`Unknown difficulty "${level}". Valid: ${Object.values(DIFFICULTY).join(", ")}`);
+          }
           return null;
         }
         // For Medium we need totalCollectibles ≥ 20, otherwise getLevel()
@@ -310,6 +318,13 @@ export class Game {
     this.cachedSkyGradient.addColorStop(0, "#c7cbca");
     this.cachedSkyGradient.addColorStop(0.55, "#aeb4b5");
     this.cachedSkyGradient.addColorStop(1, "#858c8e");
+    this.cachedVignetteGradient = this.context.createRadialGradient(
+      this.width * 0.5, this.height * 0.42, this.width * 0.2,
+      this.width * 0.5, this.height * 0.5,
+      Math.max(this.width, this.height) * 0.72,
+    );
+    this.cachedVignetteGradient.addColorStop(0, "rgba(0, 0, 0, 0)");
+    this.cachedVignetteGradient.addColorStop(1, "rgba(8, 11, 12, 0.16)");
 
     if (this.state === STATE.START || this.state === STATE.GAME_OVER) {
       this.player.x = this.width * 0.25;
@@ -318,6 +333,9 @@ export class Game {
   }
 
   start() {
+    this.worldX = 0;
+    this.distance = 0;
+    this.speed = 170;
     this.beers = 0;
     this.coffees = 0;
     // Difficulty sticky flag — once the player crosses into Hard we never
@@ -349,10 +367,12 @@ export class Game {
     this.input.setEnabled(true);
     this.ui.update(this.snapshot());
     this.ui.showPlaying();
+    this.audio.primeAmbient();
     // Kick off background music (loops until stopMusic is called).
     // Volume comes from audioConfig.music.background — single source of truth.
     this.audio.playMusic("background", audioConfig.music.background.volume);
     this.lastTime = performance.now();
+    this.lastRenderedTime = this.lastTime;
   }
 
   end() {
@@ -362,6 +382,7 @@ export class Game {
     this.audio.playGameOver();
     this.audio.stopMusic();
     this.audio.stopAirplane();
+    this.audio.stopBird();
     this.ui.showGameOver(this.snapshot());
   }
 
@@ -371,6 +392,7 @@ export class Game {
     this.pauseTimestamp = performance.now();
     this.audio.stopMusic();
     this.audio.stopAirplane();
+    this.audio.stopBird();
     this.ui.showPaused();
   }
 
@@ -378,7 +400,9 @@ export class Game {
     if (this.state !== STATE.PAUSED) return;
     this.state = STATE.PLAYING;
     this.lastTime = performance.now();
+    this.lastRenderedTime = this.lastTime;
     this.audio?.playMusic?.("background", audioConfig.music.background.volume);
+    this.audio?.primeAmbient?.();
     this.ui.hidePaused();
   }
 
@@ -430,13 +454,14 @@ export class Game {
 
   frame(timestamp) {
     if (!this.lastTime) this.lastTime = timestamp;
+    if (!this.lastRenderedTime) this.lastRenderedTime = this.lastTime;
     const frameTime = timestamp - this.lastTime;
     if (frameTime > 0) this.recordFrameTime(frameTime);
     // Cap deltaTime at 100 ms so a single frame skip (resize, GC, tab refocus)
     // doesn't catapult the world forward — but allow more headroom than 0.034
     // so a normal 60 Hz frame (16.7 ms) and a slightly delayed frame (33 ms)
     // both feel smooth.
-    const deltaTime = Math.min(frameTime / 1000, 0.1);
+    const renderFrameTime = timestamp - this.lastRenderedTime;
     this.lastTime = timestamp;
 
     // PERF-DIAG #4 — frame cap. On high-refresh displays (120/144 Hz) the
@@ -448,10 +473,12 @@ export class Game {
     //
     // Toggle: in the console, `__game.setFpsCap(60)` to lock, `__game.setFpsCap(0)`
     // to release. Default is uncapped (the browser decides).
-    if (!this.fpsLogic.shouldRender(frameTime)) {
+    if (!this.fpsLogic.shouldRender(renderFrameTime)) {
       requestAnimationFrame(this.frame);
       return;
     }
+    this.lastRenderedTime = timestamp;
+    const deltaTime = Math.min(renderFrameTime / 1000, 0.1);
 
     // PERF-DIAG: stamp frame start so the post-draw block can measure the
     // full frame cost (update + draw). Cheap, no side effects.
@@ -478,6 +505,7 @@ export class Game {
     // cost in this branch is just one state read + one rAF schedule.
     if (this.state !== STATE.PLAYING) {
       this.lastTime = timestamp;
+      this._previousFrameMetrics = null;
       requestAnimationFrame(this.frame);
       return;
     }
@@ -511,10 +539,17 @@ export class Game {
     // Rolling stats — keep last 60 samples so the overlay shows a stable
     // average and the worst-frame pick has a meaningful window.
     if (!this._frameSamples) this._frameSamples = [];
-    // frameTime = wall-clock gap between rAF ticks (what browser saw).
-    // frameMs = our measured draw duration. Disagreement between the
-    // two pinpoints where the stall happened (see worst-of-N comment).
-    this._frameSamples.push({ frameTime, frameMs, updateMs, stepMs, frameStartMs: this.frameStartMs });
+    // A gap between rAF callbacks contains the PREVIOUS frame's work.
+    // Pair its wall time with that work, not with the draw we just finished.
+    if (this._previousFrameMetrics) {
+      this._frameSamples.push({
+        frameTime: renderFrameTime,
+        ...this._previousFrameMetrics,
+      });
+    }
+    this._previousFrameMetrics = {
+      frameMs, updateMs, stepMs, frameStartMs: this.frameStartMs,
+    };
     if (this._frameSamples.length > 60) this._frameSamples.shift();
     // Draw the overlay LAST so it sits on top of everything (vignette
     // already painted). We hand it a fresh context state so we don't
@@ -534,13 +569,13 @@ export class Game {
     //       a few spikes — that's pattern (a).
     // Logged at INFO (not warn) so it doesn't drown the worst-of-N
     // line. Sampled only on parallax spikes, max once per second.
-    // Production default OFF — only fires when __game.debug.parallax=true.
-    if (!this.debug?.parallax) {
+    // Production default OFF — only fires when __DEBUG.isParallax=true.
+    if (!window.__DEBUG?.isParallax) {
       this._parallaxSpikeLogTimer = null;
     } else if (steps.parallax > 30 && this._parallaxSpikeLogTimer == null) {
       this._parallaxSpikeLogTimer = 0;
     }
-    if (this.debug?.parallax && this._parallaxSpikeLogTimer != null) {
+    if (window.__DEBUG?.isParallax && this._parallaxSpikeLogTimer != null) {
       this._parallaxSpikeLogTimer += deltaTime;
       if (this._parallaxSpikeLogTimer <= 1.0) {
         const w = this.worldX;
@@ -564,8 +599,8 @@ export class Game {
     // down step costs, so the console stays scannable instead of being
     // a wall of identical 16.7ms noise.
     //
-    // frameTime = wall-clock gap between rAF ticks (what the browser
-    // actually saw). frameMs = our draw duration. They can disagree:
+    // frameTime = wall-clock gap to the next rendered rAF callback.
+    // frameMs = work done in the preceding callback. They can disagree:
     //   frameTime=106ms frameMs=5ms   → browser stalled outside our
     //                                   draw (GPU/compositor sync,
     //                                   texture upload, GC).
@@ -579,7 +614,7 @@ export class Game {
         if (s.frameTime > worst.frameTime) worst = s;
       }
       // Quiet when healthy. 18ms = 60fps budget + a hair of slack.
-      if (worst.frameTime > 18) {
+      if (worst.frameTime > 18 && window.__DEBUG?.isPerfWorst) {
         // PERF-DIAG #6 — on the FIRST hitch, install the long-task
         // observer so subsequent samples can attribute the time. We do
         // it lazily so healthy runs don't pay the observer overhead.
@@ -744,11 +779,15 @@ export class Game {
         }
       });
       po.observe({ entryTypes: ["longtask"] });
-      console.log("[perf-diag] long-task observer installed");
+      if (window.__DEBUG?.isPerfDiag) {
+        console.log("[perf-diag] long-task observer installed");
+      }
     } catch (e) {
       // PerformanceObserver isn't supported on every browser — fail
       // silently and fall back to the heap-delta signal.
-      console.warn("[perf-diag] long-task observer unavailable:", e?.message ?? e);
+      if (window.__DEBUG?.isPerfDiag) {
+        console.warn("[perf-diag] long-task observer unavailable:", e?.message ?? e);
+      }
     }
   }
 
@@ -756,8 +795,14 @@ export class Game {
     this.frameTimes.push(frameTime);
     if (this.frameTimes.length > FRAME_TIMING_SAMPLE_SIZE) this.frameTimes.shift();
 
-    const average = this.frameTimes.reduce((sum, value) => sum + value, 0) / this.frameTimes.length;
-    const variance = this.frameTimes.reduce((sum, value) => sum + (value - average) ** 2, 0) / this.frameTimes.length;
+    let sum = 0;
+    let sumSquares = 0;
+    for (const value of this.frameTimes) {
+      sum += value;
+      sumSquares += value * value;
+    }
+    const average = sum / this.frameTimes.length;
+    const variance = Math.max(0, sumSquares / this.frameTimes.length - average * average);
     const stdDev = Math.sqrt(variance);
     this.frameTiming = {
       average,
@@ -771,7 +816,9 @@ export class Game {
       && !this.frameTiming.withinBudget
       && !this.frameTimingWarningIssued
     ) {
-      console.warn(`[frame-timing] high frame-time deviation: ${this.frameTiming.stdDev.toFixed(1)}ms`);
+      if (window.__DEBUG?.isFrameTiming) {
+        console.warn(`[frame-timing] high frame-time deviation: ${this.frameTiming.stdDev.toFixed(1)}ms`);
+      }
       this.frameTimingWarningIssued = true;
     }
   }
@@ -902,45 +949,69 @@ export class Game {
 
   async loadParallaxBackground() {
     const onProgress = this.onProgress;
-    // Race the actual load against a hard 5 s deadline. If the parallax
-    // JSON or any image fails (offline, 404, hung connection) we want to
-    // give up rather than block the player behind a spinner forever. After
-    // the deadline the game continues with the procedural fallback and
-    // main.js hides the loading screen + shows an offline toast.
     const PARALLAX_LOAD_TIMEOUT_MS = 5000;
-    const timeoutPromise = new Promise((resolve) => {
-      setTimeout(() => resolve({ timedOut: true }), PARALLAX_LOAD_TIMEOUT_MS);
+    const controller = new AbortController();
+    let timeoutId;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => {
+        controller.abort();
+        reject(new Error(`Parallax load exceeded ${PARALLAX_LOAD_TIMEOUT_MS} ms timeout`));
+      }, PARALLAX_LOAD_TIMEOUT_MS);
     });
-    const loadPromise = this._loadParallaxBackgroundImpl(onProgress);
-
-    const result = await Promise.race([
-      loadPromise.then((value) => ({ ok: true, value })),
-      timeoutPromise,
-    ]);
-    if (result && result.timedOut) {
-      // Force the load promise to reject so the failure path below can
-      // surface the offline toast. We can't cancel the underlying fetches
-      // without AbortController plumbing, but the Promise.race already gave
-      // us the timeout signal — what matters is that we report the failure
-      // to the UI now rather than later.
-      try {
-        await Promise.race([loadPromise, new Promise((r) => setTimeout(r, 250))]);
-      } catch (_) {
-        // The eventual rejection will be swallowed by the unhandled-rejection
-        // handler that the original implementation already logs in catch().
-      }
-      throw new Error(
-        `Parallax load exceeded ${PARALLAX_LOAD_TIMEOUT_MS} ms timeout`,
-      );
+    try {
+      return await Promise.race([
+        this._loadParallaxBackgroundImpl(onProgress, controller.signal),
+        timeoutPromise,
+      ]);
+    } catch (error) {
+      // A decode already in flight may settle later. The signal stops its
+      // result from changing game state, and the fallback stays stable.
+      controller.abort();
+      this.parallaxImages.clear();
+      this.parallaxProject = null;
+      this.parallaxSceneCache = null;
+      this.cachedGroundY = this.computeGroundY();
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
-    return result.value;
   }
 
-  async _loadParallaxBackgroundImpl(onProgress) {
+  async _loadParallaxBackgroundImpl(onProgress, signal) {
+    const ensureActive = () => {
+      if (signal?.aborted) throw new Error("Parallax load cancelled");
+    };
     try {
-      const response = await fetch("./assets/backgrounds/background.parallax.json");
+      // Runtime export keeps the same scene artwork while cropping empty
+      // transparent margins from images. This cuts decoded texture pixels
+      // to about a quarter of the editor export and avoids GPU cache churn.
+      const backgroundFile = new URLSearchParams(window.location?.search || "").get("background") === "legacy"
+        ? "./assets/backgrounds/background.parallax.json"
+        : "./assets/backgrounds/background.runtime.json";
+      const response = await fetch(backgroundFile, { signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const project = await response.json();
+      ensureActive();
+      // Apply the runtime layer filter before decoding. The exported JSON
+      // includes sky/sun/clouds and editor-only layers that are never drawn.
+      const scene = project.scene;
+      const sceneForRuntime = {
+        ...scene,
+        layers: scene.layers
+          .filter((layer) =>
+            layer.id !== "sky" &&
+            layer.id !== "sun" &&
+            layer.id !== "clouds" &&
+            !SKIP_LAYER_IDS.has(layer.id)
+          )
+          .map((layer) => ({ ...layer })),
+      };
+      const usedAssetIds = new Set();
+      for (const layer of sceneForRuntime.layers) {
+        for (const object of layer.objects || []) {
+          usedAssetIds.add(object.assetId);
+        }
+      }
       // Decode foreground assets first so the playable scene is visible
       // within the first frame or two; far/mid layers can land a moment
       // later. The sky / sun / clouds layers are not used by the game
@@ -951,7 +1022,7 @@ export class Game {
         "mid", "far",
       ];
       const layerByAssetId = new Map();
-      for (const layer of project.scene.layers) {
+      for (const layer of sceneForRuntime.layers) {
         for (const object of layer.objects || []) {
           if (!layerByAssetId.has(object.assetId)) {
             layerByAssetId.set(object.assetId, layer.id);
@@ -963,7 +1034,9 @@ export class Game {
         const idx = SCENE_LAYER_PRIORITY.indexOf(layerId);
         return idx === -1 ? SCENE_LAYER_PRIORITY.length : idx;
       };
-      const sortedAssets = [...project.assets].sort((a, b) => order(a) - order(b));
+      const sortedAssets = project.assets
+        .filter((asset) => usedAssetIds.has(asset.id))
+        .sort((a, b) => order(a) - order(b));
       // Decode in chunks of 4 at a time so we don't spike 34 simultaneous
       // decode jobs — that would jank the first paint hard on phones.
       const CONCURRENCY = 4;
@@ -973,48 +1046,33 @@ export class Game {
       // until .has-progress is on the parent element.
       onProgress?.(0, sortedAssets.length);
       for (let i = 0; i < sortedAssets.length; i += CONCURRENCY) {
+        ensureActive();
         const batch = sortedAssets.slice(i, i + CONCURRENCY);
         await Promise.all(batch.map(async (asset) => {
+          ensureActive();
           if (this.parallaxImages.has(asset.id)) return;
           const image = new Image();
           image.src = asset.data;
           await image.decode();
+          ensureActive();
           this.parallaxImages.set(asset.id, image);
         }));
+        ensureActive();
         // Report progress in terms of how many batches we *started*. If the
         // last batch is shorter than CONCURRENCY we still clamp the upper
         // bound to sortedAssets.length so the text never reads "36 / 34".
         const done = Math.min(i + CONCURRENCY, sortedAssets.length);
         onProgress?.(done, sortedAssets.length);
       }
-      this.parallaxProject = project;
-      // Pre-build the scene we hand to ParallaxRuntime every frame. Drops:
-      //   - sky layer (game paints its own viewport gradient)
-      //   - sun and clouds (loop-only export puts them only in part 1 of the
-      //     PNG, so when the parallax phase crosses the 4096→4500 boundary the
-      //     viewport shows an empty sky strip — see docs/parallax-bug-sun-clouds.md)
-      //   - any SKIP_LAYER_IDS duplicates
-      // The remaining layers (far, mid, houses, road, ...) all wrap correctly.
-      const scene = project.scene;
-      const sceneForRuntime = {
-        ...scene,
-        layers: scene.layers
-          .filter((layer) =>
-            layer.id !== "sky" &&
-            layer.id !== "sun" &&
-            layer.id !== "clouds" &&
-            !SKIP_LAYER_IDS.has(layer.id)
-          )
-          .map((layer) => {
-            return { ...layer };
-          }),
-      };
+      ensureActive();
+      // Keep scene metadata but release the large base64 asset strings.
+      this.parallaxProject = { scene };
       this.parallaxSceneCache = sceneForRuntime;
       // The scene changed — refresh ground cache so the player doesn't spawn
       // or rest on a fallback ground line.
       this.cachedGroundY = this.computeGroundY();
     } catch (error) {
-      console.warn("[parallax] failed to load:", error);
+      if (!signal?.aborted) console.warn("[parallax] failed to load:", error);
       // Re-throw so loadParallaxBackground()'s caller (the Game constructor)
       // can surface the failure to main.js, which then shows the offline
       // toast. Without this re-throw, callers wouldn't know we fell back.
@@ -1028,8 +1086,8 @@ export class Game {
    * disappear" signal.
    *
    * Two checks both have to pass for a successful resolve:
-   *   1. this.parallaxProject !== null   — parallax JSON + decoded images
-   *   2. this.player.parts    !== null   — bird SVG parts (body, wing, hat, legs)
+   *   1. The parallax is ready or definitively failed.
+   *   2. The bird SVG is ready or the visible canvas fallback is active.
    *
    * If parallaxLoadFailed is true (set by the .catch in the constructor),
    * we resolve anyway so the loading screen still goes away — the offline
@@ -1059,7 +1117,7 @@ export class Game {
       }
       const check = () => {
         const parallaxReady = this.parallaxProject !== null || this.parallaxLoadFailed;
-        const birdReady = this.player.parts !== null;
+        const birdReady = this.player.parts !== null || this.birdLoadFailed;
         if (parallaxReady && birdReady && this._entityReady === true) {
           resolve();
           return;
@@ -1076,11 +1134,14 @@ export class Game {
     return this.parallaxLoadFailed;
   }
 
-  // PERF-FIX #2 — GPU cache pre-warm. The diagnostic data showed that the
-  // hitching (100-130ms wall, 0.5ms draw, 132ms stall) is caused by the
-  // browser lazily uploading parallax layers + player SVG parts to GPU
-  // textures the first time they show up in a draw. We pay this cost
-  // here, while the loading screen is still up, so the user never sees it.
+  didBirdFail() {
+    return this.birdLoadFailed;
+  }
+
+  // Pre-render loaded art while the loading screen is visible. The largest
+  // measured gameplay hitches came from oversized parallax images and
+  // Konobari's sprite sheet; compact runtime assets are the primary fix.
+  // This sweep handles remaining first-use drawing costs before play.
   //
   // Design choices (with feedback from reviewer):
   //   - Offscreen canvas is the SAME size as the visible canvas, with the
@@ -1108,14 +1169,14 @@ export class Game {
     try {
       off = document.createElement("canvas");
     } catch (_) {
-      console.warn("[warmup] cannot create canvas; skipping");
+      if (window.__DEBUG?.isWarmup) console.warn("[warmup] cannot create canvas; skipping");
       return;
     }
     off.width = Math.round(this.width * this.pixelRatio);
     off.height = Math.round(this.height * this.pixelRatio);
     const ctx = off.getContext("2d");
     if (!ctx) {
-      console.warn("[warmup] cannot get 2d context; skipping");
+      if (window.__DEBUG?.isWarmup) console.warn("[warmup] cannot get 2d context; skipping");
       return;
     }
     ctx.setTransform(this.pixelRatio, 0, 0, this.pixelRatio, 0, 0);
@@ -1169,12 +1230,12 @@ export class Game {
           ctx.restore();
           layersDone++;
         } catch (e) {
-          console.warn("[warmup] parallax layer render failed at wx=" + wx, e);
+          if (window.__DEBUG?.isWarmup) console.warn("[warmup] parallax layer render failed at wx=" + wx, e);
         }
         await yield_();
       }
     } else {
-      console.warn("[warmup] parallaxSceneCache not ready; skipping parallax");
+      if (window.__DEBUG?.isWarmup) console.warn("[warmup] parallaxSceneCache not ready; skipping parallax");
     }
 
     // --- Player SVG parts ---
@@ -1192,12 +1253,12 @@ export class Game {
           ctx.drawImage(img, 0, 0, 840, 1080);
           partsDone++;
         } catch (e) {
-          console.warn("[warmup] player part '" + key + "' failed:", e);
+          if (window.__DEBUG?.isWarmup) console.warn("[warmup] player part '" + key + "' failed:", e);
         }
         await yield_();
       }
     } else {
-      console.warn("[warmup] player parts not ready; skipping");
+      if (window.__DEBUG?.isWarmup) console.warn("[warmup] player parts not ready; skipping");
     }
 
     // --- Cached entity images (PERF-FIX #3) ---
@@ -1229,7 +1290,7 @@ export class Game {
           imgCacheDone++;
         } catch (e) {
           imageErrors++;
-          console.warn("[warmup] cached image draw failed", e);
+          if (window.__DEBUG?.isWarmup) console.warn("[warmup] cached image draw failed", e);
         }
         // Yield every few images to stay below the 50 ms long-task limit.
         if ((imgCacheDone + imageErrors) % 4 === 0) await yield_();
@@ -1238,52 +1299,7 @@ export class Game {
       // swaps the overlay in has a chance to run.
       await yield_();
     } else {
-      console.warn("[warmup] no entity cache; skipping img cache sweep");
-    }
-
-    // -------------------------------------------------------------------------
-    // PERF-FIX-TESTA — Konobari first-use decode + per-frame warm-up.
-    //
-    // Hypothesis: the first NPCKonobari spawn stalls 50–100 ms because the
-    // 2304×2240 PNG sprite sheet finishes its decode + GPU upload only on
-    // the first drawImage() call. By preloading the sheet, awaiting its
-    // decode, AND drawing seven representative frames (0,1,6,12,18,24,29)
-    // onto the offscreen canvas BEFORE gameplay starts, we force the GPU
-    // upload to happen on the loading screen instead of mid-game.
-    //
-    // The KonobariAnimation.draw() path applies translate→rotate→scale→
-    // scale(-dir)→drawImage. We replicate that exact pipeline here so the
-    // warmed state matches what gameplay will actually exercise.
-    // -------------------------------------------------------------------------
-    let konobariFramesDrawn = 0;
-    try {
-      const konobariSheet = await KonobariAnimation.preload();
-      if (konobariSheet && konobariSheet.naturalWidth > 0) {
-        // Mirror the real draw() transform stack so the warm-up matches
-        // gameplay exactly.
-        const FRAME_W = 384, FRAME_H = 448, COLS = 6;
-        const warmFrames = [0, 1, 6, 12, 18, 24, 29];
-        for (const frame of warmFrames) {
-          const sx = (frame % COLS) * FRAME_W;
-          const sy = Math.floor(frame / COLS) * FRAME_H;
-          ctx.save();
-          ctx.translate(this.width * 0.5, this.height * 0.5);
-          ctx.rotate(0);
-          ctx.scale(0.325 * -1, 0.325); // direction -1 like gameplay
-          ctx.drawImage(
-            konobariSheet,
-            sx, sy, FRAME_W, FRAME_H,
-            -192, -418, FRAME_W, FRAME_H,
-          );
-          ctx.restore();
-          konobariFramesDrawn++;
-          await yield_();
-        }
-      } else {
-        console.warn("[warmup] konobari sheet not ready; skipping frame warmup");
-      }
-    } catch (e) {
-      console.warn("[warmup] konobari warmup failed:", e?.message ?? e);
+      if (window.__DEBUG?.isWarmup) console.warn("[warmup] no entity cache; skipping img cache sweep");
     }
 
     // -------------------------------------------------------------------------
@@ -1311,6 +1327,10 @@ export class Game {
         ["farWing", "nearWing", "tail", "feet", "body", "head"],
       );
       if (birdParts) {
+        // The spawner otherwise starts an already-resolved Promise on its
+        // first timer tick and immediately sees an empty partsCache, causing
+        // the first formation to be skipped.
+        this.birdManager.partsCache = birdParts;
         const tmp = new EnemyBird(0, 0, { scale: 0.19, direction: -1 });
         tmp.setParts(birdParts);
         // Walk through ~6 wing phases (≈0.55s of wing sweep at 10.8 Hz)
@@ -1323,10 +1343,10 @@ export class Game {
           await yield_();
         }
       } else {
-        console.warn("[warmup] bird parts not in cache; skipping bird warmup");
+        if (window.__DEBUG?.isWarmup) console.warn("[warmup] bird parts not in cache; skipping bird warmup");
       }
     } catch (e) {
-      console.warn("[warmup] bird warmup failed:", e?.message ?? e);
+      if (window.__DEBUG?.isWarmup) console.warn("[warmup] bird warmup failed:", e?.message ?? e);
     }
 
     // -------------------------------------------------------------------------
@@ -1341,8 +1361,13 @@ export class Game {
       const { NPCPrsan } = await import("./npc_prsan.js");
       const { NPCNidjo } = await import("./npc_nidjo.js");
       const { NPCToni } = await import("./npc_toni.js");
+      const { NPCDebs } = await import("./npc_debs.js");
       const { EnemyAirplane } = await import("./enemy_airplane.js");
-      const tmpAirplane = new EnemyAirplane(0, 0, { scale: 0.8, direction: 1 });
+      const tmpAirplane = new EnemyAirplane(0, 0, {
+        scale: 0.8,
+        direction: 1,
+        headImage: this.assets.cache.get("airplane-head"),
+      });
       // Wait for airplane head load — AssetLoader prewarm awaited
       // decode() already; the EnemyAirplane internal promise will resolve
       // immediately off the cached image.
@@ -1361,20 +1386,26 @@ export class Game {
       await tmpToni.ready;
       tmpToni.draw(ctx);
       npcDraws++;
+      // Debs builds a large cached canvas on first use. Do that while the
+      // loading screen is up rather than on its first mid-flight spawn.
+      const tmpDebs = new NPCDebs(0, 0, { scale: 0.30 });
+      await tmpDebs.ready;
+      tmpDebs.draw(ctx);
+      npcDraws++;
       await yield_();
     } catch (e) {
-      console.warn("[warmup] npc warmup failed:", e?.message ?? e);
+      if (window.__DEBUG?.isWarmup) console.warn("[warmup] npc warmup failed:", e?.message ?? e);
     }
 
     // -------------------------------------------------------------------------
-    // PERF-FIX — Konobari full 30-frame sweep. The earlier test only
-    // warmed 7 representative frames; on some machines the GPU still
-    // paid a first-use cost for the other 23 frames during gameplay.
-    // Walking through every frame once eliminates that residual hitch.
+    // Pre-slice the large Konobari sheet into 30 small ImageBitmaps and
+    // draw each once while loading. Gameplay then avoids repeatedly
+    // sampling a 2304×2240 texture to show one 384×448 frame.
     // -------------------------------------------------------------------------
     let konobariFullFrames = 0;
     try {
       const konobariSheet = await KonobariAnimation.preload();
+      const konobariFrames = await KonobariAnimation.preloadFrames();
       if (konobariSheet && konobariSheet.naturalWidth > 0) {
         const FRAME_W = 384, FRAME_H = 448, COLS = 6;
         for (let frame = 0; frame < 30; frame++) {
@@ -1383,24 +1414,30 @@ export class Game {
           ctx.save();
           ctx.translate(this.width * 0.5, this.height * 0.5);
           ctx.scale(0.325 * -1, 0.325);
-          ctx.drawImage(
-            konobariSheet,
-            sx, sy, FRAME_W, FRAME_H,
-            -192, -418, FRAME_W, FRAME_H,
-          );
+          if (konobariFrames) {
+            ctx.drawImage(konobariFrames[frame], -192, -418, FRAME_W, FRAME_H);
+          } else {
+            ctx.drawImage(
+              konobariSheet,
+              sx, sy, FRAME_W, FRAME_H,
+              -192, -418, FRAME_W, FRAME_H,
+            );
+          }
           ctx.restore();
           konobariFullFrames++;
           if (frame % 6 === 5) await yield_();
         }
       }
     } catch (e) {
-      console.warn("[warmup] konobari full sweep failed:", e?.message ?? e);
+      if (window.__DEBUG?.isWarmup) console.warn("[warmup] konobari full sweep failed:", e?.message ?? e);
     }
 
     const elapsed = performance.now() - started;
-    console.info(
-      `[warmup] complete in ${elapsed.toFixed(0)}ms | parallax×${layersDone} player×${partsDone} imgCache×${imgCacheDone}${imageErrors ? ` imgErrors=${imageErrors}` : ""} konobari×${konobariFramesDrawn}+${konobariFullFrames} bird×${birdDraws} npc×${npcDraws}`
-    );
+    if (window.__DEBUG?.isWarmup) {
+      console.info(
+        `[warmup] complete in ${elapsed.toFixed(0)}ms | parallax×${layersDone} player×${partsDone} imgCache×${imgCacheDone}${imageErrors ? ` imgErrors=${imageErrors}` : ""} konobari×${konobariFullFrames} bird×${birdDraws} npc×${npcDraws}`
+      );
+    }
   }
 
   draw() {
@@ -1521,17 +1558,15 @@ export class Game {
     steps.vig = performance.now() - stepStart;
 
     // Debug collider overlay — rendered LAST so outlines sit on top of
-    // every sprite. Toggle the DEBUG_COLLIDERS flag at the top of the
-    // file to hide; remove the line below to delete this feature.
-    //if (DEBUG_COLLIDERS) {
-    //  this.drawColliders(context);
-    //}
+    // every sprite. Controlled by the centralized debug flags.
+    if (window.__DEBUG?.isColliders) {
+      this.drawColliders(context);
+    }
   }
 
   // Debug — draws a coloured outline around every active collider.
-  // To disable entirely: set DEBUG_COLLIDERS to false. To remove from
-  // source: delete this method AND the call above AND the constant.
-/*   drawColliders(ctx) {
+  // It remains available for the centralized isColliders debug flag.
+  drawColliders(ctx) {
     ctx.save();
     ctx.lineWidth = 2;
 
@@ -1587,7 +1622,7 @@ export class Game {
     }
 
     ctx.restore();
-  } */
+  }
 
   drawSky(context) {
     context.fillStyle = this.cachedSkyGradient;
@@ -1688,17 +1723,7 @@ export class Game {
   }
 
   drawVignette(context) {
-    const gradient = context.createRadialGradient(
-      this.width * 0.5,
-      this.height * 0.42,
-      this.width * 0.2,
-      this.width * 0.5,
-      this.height * 0.5,
-      Math.max(this.width, this.height) * 0.72,
-    );
-    gradient.addColorStop(0, "rgba(0, 0, 0, 0)");
-    gradient.addColorStop(1, "rgba(8, 11, 12, 0.16)");
-    context.fillStyle = gradient;
+    context.fillStyle = this.cachedVignetteGradient;
     context.fillRect(0, 0, this.width, this.height);
   }
 
@@ -1708,6 +1733,7 @@ export class Game {
   // from this._frameSamples (rolling 60-frame window = ~1s of history).
   // Worst step name is highlighted yellow so you know where to look.
   drawPerfOverlay() {
+    if (!window.__DEBUG?.isPerfOverlay) return;
     if (!this._frameSamples || this._frameSamples.length === 0) return;
     const ctx = this.context;
     // Aggregate over the rolling window.
