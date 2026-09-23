@@ -3,9 +3,8 @@ import { audioConfig } from "./audioConfig.js";
 // AudioBus is the single owner of every audio resource in the game:
 //   * One AudioContext + master GainNode for procedural SFX
 //     (oscillator/noise — beer, coffee, hit, game-over jingle).
-//   * Dedicated HTMLAudioElement instances for long-form looping
-//     tracks (background music, airplane drone, bird caw) — HTML5
-//     audio is required because Web Audio can't loop MP3 files.
+//   * A looping HTMLAudioElement for music and preloaded, one-shot
+//     HTMLAudioElements for the crow and airplane spawn sounds.
 //   * One-shot SFX (jump) use a fresh Audio element per playback so
 //     rapid taps stack instead of cutting each other off.
 //
@@ -29,8 +28,7 @@ export class AudioBus {
     // don't allocate an Audio object on every single tap.
     this.jumpElement = null;
 
-    // Fetch ambient clips during loading. Their first playback is started
-    // silently by the first user gesture, before an enemy can appear.
+    // Fetch enemy clips during loading; neither plays until its spawn.
     this.prepareAmbient();
   }
 
@@ -42,7 +40,8 @@ export class AudioBus {
       let element = this[property];
       if (!element) {
         element = new Audio();
-        element.loop = cfg.loop !== false;
+        // Enemy clips are one-shots, regardless of the legacy config flag.
+        element.loop = false;
         element.preload = "auto";
         element.volume = 0;
         this[property] = element;
@@ -55,14 +54,10 @@ export class AudioBus {
     }
   }
 
+  // Existing game/start call sites use this method. Preload only: no
+  // silent playback before a crow formation or airplane actually spawns.
   primeAmbient() {
     this.prepareAmbient();
-    for (const element of [this.airplaneElement, this.birdElement]) {
-      if (!element || element.paused === false) continue;
-      element.volume = 0;
-      const promise = element.play();
-      if (promise && typeof promise.catch === "function") promise.catch(() => {});
-    }
   }
 
   onUserInput() {
@@ -210,11 +205,7 @@ export class AudioBus {
     this.musicElement.volume = Math.max(0, Math.min(1, volume));
   }
 
-  // ---- Airplane SFX (positional loop) --------------------------
-  // The prsan airplane uses a looping airplane.mp3 whose volume ramps
-  // based on the player's horizontal distance to the enemy: loud when
-  // close, quiet when the plane is at the screen edge, silent off-screen.
-  // Call updateAirplaneSound(x) every frame while an instance is alive.
+  // ---- Airplane SFX (one playback per spawn) -------------------
   startAirplane(key = "airplane") {
     if (typeof window === "undefined") return;
     const cfg = this.config.ambient[key];
@@ -223,26 +214,18 @@ export class AudioBus {
       return;
     }
     this.prepareAmbient();
-    this.airplaneMaxVolume = Math.max(0, Math.min(1, cfg.maxVolume));
-    if (this.airplaneElement?.paused !== false) {
-      const p = this.airplaneElement?.play();
-      if (p && typeof p.catch === "function") p.catch(() => {});
-    }
+    const element = this.airplaneElement;
+    if (!element) return;
+    element.pause();
+    element.currentTime = 0;
+    element.volume = Math.max(0, Math.min(1, cfg.maxVolume));
+    const promise = element.play();
+    if (promise && typeof promise.catch === "function") promise.catch(() => {});
   }
 
-  // volume from 0..1 — call every frame with the plane's x position; the
-  // helper maps distance-from-center to a bell-shaped gain curve.
-  updateAirplaneSound(planeX, playerX, canvasWidth) {
-    if (!this.airplaneElement) return;
-    const center = canvasWidth / 2;
-    const distanceFromCenter = Math.min(1, Math.abs(planeX - center) / (canvasWidth / 2));
-    // Bell curve: loudest at distance 0.4 (plane mid-flight), quiet at edges.
-    const bell = 1 - Math.pow((distanceFromCenter - 0.4) / 0.6, 2);
-    const targetVolume = Math.max(0, Math.min(1, bell)) * this.airplaneMaxVolume;
-    // Smooth ramp to avoid clicks/pops.
-    const current = this.airplaneElement.volume;
-    this.airplaneElement.volume = current + (targetVolume - current) * 0.15;
-  }
+  // Kept for the existing manager call. A spawn sound plays once at a
+  // fixed volume; moving the enemy does not restart or fade the clip.
+  updateAirplaneSound() {}
 
   stopAirplane() {
     if (!this.airplaneElement) return;
@@ -252,12 +235,10 @@ export class AudioBus {
   }
 
   silenceAirplane() {
-    if (this.airplaneElement) this.airplaneElement.volume = 0;
+    this.stopAirplane();
   }
 
-  // ---- Bird SFX (positional loop) ------------------------------
-  // The crow uses the same looping-volume pattern as the airplane — a
-  // separate Audio element so airplane and bird can play simultaneously.
+  // ---- Crow SFX (one playback per formation) ------------------
   startBird(key = "bird") {
     if (typeof window === "undefined") return;
     const cfg = this.config.ambient[key];
@@ -266,23 +247,16 @@ export class AudioBus {
       return;
     }
     this.prepareAmbient();
-    this.birdMaxVolume = Math.max(0, Math.min(1, cfg.maxVolume));
-    if (this.birdElement?.paused !== false) {
-      const p = this.birdElement?.play();
-      if (p && typeof p.catch === "function") p.catch(() => {});
-    }
+    const element = this.birdElement;
+    if (!element) return;
+    element.pause();
+    element.currentTime = 0;
+    element.volume = Math.max(0, Math.min(1, cfg.maxVolume));
+    const promise = element.play();
+    if (promise && typeof promise.catch === "function") promise.catch(() => {});
   }
 
-  updateBirdSound(birdX, playerX, canvasWidth) {
-    if (!this.birdElement) return;
-    const center = canvasWidth / 2;
-    const distanceFromCenter = Math.min(1, Math.abs(birdX - center) / (canvasWidth / 2));
-    // Bell curve: loudest at distance 0.4 (bird mid-flight), quiet at edges.
-    const bell = 1 - Math.pow((distanceFromCenter - 0.4) / 0.6, 2);
-    const targetVolume = Math.max(0, Math.min(1, bell)) * this.birdMaxVolume;
-    const current = this.birdElement.volume;
-    this.birdElement.volume = current + (targetVolume - current) * 0.15;
-  }
+  updateBirdSound() {}
 
   stopBird() {
     if (!this.birdElement) return;
@@ -292,6 +266,6 @@ export class AudioBus {
   }
 
   silenceBird() {
-    if (this.birdElement) this.birdElement.volume = 0;
+    this.stopBird();
   }
 }
