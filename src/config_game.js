@@ -34,8 +34,8 @@ export const DIFFICULTY = Object.freeze({
 
 /** Inclusive totalCollectibles thresholds. totalCollectibles is `beers + coffees`. */
 const EASY_MAX = 19;     // 0..19  → EASY
-const MEDIUM_MAX = 69;   // 20..69 → MEDIUM
-                          // 70+    → HARD
+const MEDIUM_MAX = 25;   // 20..45 → MEDIUM
+                          // 46+    → HARD
 
 /**
  * Per-level gameplay tuning. Read by the spawner managers.
@@ -71,11 +71,11 @@ export const DIFFICULTY_LEVELS = Object.freeze({
   }),
   [DIFFICULTY.MEDIUM]: Object.freeze({
     birdIntervalMin: 6,
-    birdIntervalMax: 12,
-    birdMinSize: 2,
+    birdIntervalMax: 8,
+    birdMinSize: 3,
     birdMaxSize: 4,
     airplaneEnabled: true,
-    airplaneIntervalMin: 5,
+    airplaneIntervalMin: 7,
     airplaneIntervalMax: 12,
     airplaneDamage: 2,
     konobariEnabled: true,
@@ -87,10 +87,10 @@ export const DIFFICULTY_LEVELS = Object.freeze({
     konobariHitCooldown: 2.5,
   }),
   [DIFFICULTY.HARD]: Object.freeze({
-    birdIntervalMin: 5,
-    birdIntervalMax: 10,
-    birdMinSize: 3,
-    birdMaxSize: 5,
+    birdIntervalMin: 6,
+    birdIntervalMax: 8,
+    birdMinSize: 4,
+    birdMaxSize: 6,
     airplaneEnabled: true,
     airplaneIntervalMin: 4,
     airplaneIntervalMax: 7,

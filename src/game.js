@@ -11,6 +11,7 @@ import { SKIP_LAYER_IDS, ZOOM_BACKGROUND } from "./parallax-background.js";
 import { FPSLogic } from "./fps_logic.js";
 import { KonobariAnimation } from "./konobariAnimation.js";
 import { EnemyBird } from "./enemy_bird.js";
+import { LevelEvents } from "./level_events.js";
 
 const CITY_WORLD_LENGTH = 4500;
 const FRAME_TIMING_SAMPLE_SIZE = 120;
@@ -63,6 +64,12 @@ export class Game {
     // (e.g. a future mechanic). Reset in start() so a new game starts in
     // Easy mode again.
     this.hasEnteredHard = false;
+    // LevelEvents — push-based level-config transitions. Managers that care
+    // about the level (AirplaneManager, BirdManager) subscribe in their
+    // constructors and re-arm their scheduleNext() when game.js emits a new
+    // config from the pickup loop, from start(), or from forceDifficulty.
+    // Replaces the old "every-frame getLevelConfig() poll" pattern.
+    this.levelEvents = new LevelEvents();
     // Reused every frame so we don't allocate a snapshot object per update.
     this.uiSnapshot = {
       score: 0,
@@ -114,6 +121,7 @@ export class Game {
       audio: this.audio,
       assets: this.assets,
       player: this.player,
+      levelEvents: this.levelEvents,
       levelConfig: initialLevelConfig,
       // Called the moment a prsan hit is accepted. Triggers the visual
       // burst, the hit sound, and arms the 2-second invincibility window.
@@ -164,6 +172,7 @@ export class Game {
       audio: this.audio,
       player: this.player,
       assets: this.assets,
+      levelEvents: this.levelEvents,
       levelConfig: initialLevelConfig,
       // Called the moment a crow hit is accepted. Reuses the same
       // collisionEffects + audio.playHit + invincibility window as the
@@ -182,6 +191,14 @@ export class Game {
         this.ui.update(this.snapshot());
       },
     });
+
+    // Seed the LevelEvents bus with the active initial level. Both
+    // managers subscribed during their constructors and immediately
+    // re-arm their scheduleNext() from the emitted config, so they stay
+    // aligned with whatever level the player starts in. emit() is a
+    // no-op when called with the same config the bus already holds, so
+    // re-running it later is cheap.
+    this.levelEvents.emit(initialLevelConfig);
 
     this.parallaxProject = null;
     this.parallaxImages = new Map();
@@ -279,9 +296,13 @@ export class Game {
           }
         }
         // Re-arm both spawn timers with the new level's interval so the
-        // change is immediately visible in the game loop.
-        this.birdManager.scheduleNext(this.getLevelConfig());
-        this.airplaneManager.scheduleNext(this.getLevelConfig());
+        // change is immediately visible in the game loop. Pushed through
+        // the LevelEvents bus instead of calling each manager directly —
+        // keeps the "where does level config come from?" answer in one
+        // place. force:true bypasses the short-circuit so listeners
+        // always re-arm, even if forceDifficulty produced the same
+        // config object that was already active.
+        this.levelEvents.emit(this.getLevelConfig(), { force: true });
         return this.difficulty;
       };
       window.__game.addCollectibles = (n) => {
@@ -297,6 +318,35 @@ export class Game {
       window.__game.resetDifficulty = () => {
         this.hasEnteredHard = false;
         return this.difficulty;
+      };
+      // PERF-DIAG #8 — force an immediate spawn so hitch↔spawn correlation
+      // is reachable without waiting 10–15s for the natural cadence.
+      // Works only when no instance is currently on screen (otherwise
+      // we can't have two planes/crows at once). For airplane on Easy
+      // the gate is closed (nextSpawn=Infinity); forceSpawn bypasses
+      // that gate on purpose so the A/B test can isolate audio/draw
+      // effects even where airplane would normally not spawn.
+      window.__game.forceSpawn = (kind) => {
+        const m =
+          kind === "bird" ? this.birdManager :
+          kind === "airplane" ? this.airplaneManager :
+          null;
+        if (!m) {
+          console.warn(`[forceSpawn] unknown kind "${kind}" — expected "bird" or "airplane"`);
+          return false;
+        }
+        if (m.instances && m.instances.length > 0) {
+          console.warn("[forceSpawn] već ima aktivnih, pričekaj da odu s ekrana");
+          return false;
+        }
+        // Setting timer to nextSpawn satisfies the >= check in update()
+        // on the very next tick. If nextSpawn is Infinity (Easy no-airplane)
+        // the next-frame branch fires anyway — that's intentional for A/B.
+        m.timer = Number.isFinite(m.nextSpawn) ? m.nextSpawn : 1e9;
+        if (window.__DEBUG?.isCheatsheet) {
+          console.log(`[forceSpawn] ${kind} scheduled, will spawn next frame`);
+        }
+        return true;
       };
     }
     requestAnimationFrame(this.frame);
@@ -357,6 +407,14 @@ export class Game {
     this.airplaneManager.reset(levelConfig);
     this.birdManager.reset(levelConfig);
     this.npcManager.reset(levelConfig);
+    // Re-seed the LevelEvents bus with the active level. force:true
+    // bypasses the reference-equality short-circuit so listeners
+    // re-arm even when the bus already holds the same config object
+    // (e.g. after a death restart where levelEvents.current was
+    // carried over from the previous run). Manager reset()s above
+    // already updated their internal state, so this is mostly a
+    // belt-and-braces sync for any future subscribers.
+    this.levelEvents.emit(levelConfig, { force: true });
     // Reset in place rather than re-instantiating: managers (AirplaneManager)
     // already hold a reference to `player` from the constructor, and
     // swapping `this.player` to a fresh instance would orphan that
@@ -503,6 +561,21 @@ export class Game {
     // no worst-1s log). The rAF loop continues so resume() can re-arm
     // gameplay timing cleanly without a separate start path; the per-frame
     // cost in this branch is just one state read + one rAF schedule.
+    //
+    // RESUME-FIX — listen for the unpause keypress HERE rather than
+    // inside update(), because update() is what we just skipped. Without
+    // this consumePause() call, the player can press P to pause but
+    // pressing P again has no effect: the frame loop is in the
+    // PAUSED branch and never reaches the update() that would call
+    // togglePause(). Game-over gets the same treatment so an ESC
+    // presses on the game-over screen doesn't silently no-op either.
+    if (this.state === STATE.PAUSED) {
+      if (this.input.consumePause()) this.togglePause();
+      this.lastTime = timestamp;
+      this._previousFrameMetrics = null;
+      requestAnimationFrame(this.frame);
+      return;
+    }
     if (this.state !== STATE.PLAYING) {
       this.lastTime = timestamp;
       this._previousFrameMetrics = null;
@@ -700,8 +773,17 @@ export class Game {
             }
           }
           if (nearest && nearestAbs < 500) {
+            // PERF-DIAG #8 — surface the spawn-cost breakdown we
+            // captured at spawn time. lastSpawnMs covers the whole spawn
+            // (constructor + audio); lastAudioMs isolates the audio call
+            // so we can tell whether audio was the hitch. A heavy
+            // lastSpawnMs with tiny lastAudioMs means construction
+            // work (or first-draw raster) — that path points at
+            // warm-up / pre-rasterisation, not at audio.
+            const audioMs = Number.isFinite(nearest.audioMs) ? nearest.audioMs : 0;
+            const spawnMs = Number.isFinite(nearest.ms) ? nearest.ms : 0;
             console.warn(
-              `[hitch↔spawn] type=${nearest.type} Δt=${nearest.dt.toFixed(1)}ms (worst frame was ${worst.frameTime.toFixed(0)}ms)`
+              `[hitch↔spawn] type=${nearest.type} Δt=${nearest.dt.toFixed(1)}ms spawn=${spawnMs.toFixed(1)}ms audio=${audioMs.toFixed(1)}ms (worst frame was ${worst.frameTime.toFixed(0)}ms)`
             );
           }
         }
@@ -846,7 +928,6 @@ export class Game {
 
     const groundY = this.getGroundY();
     this.collectibles.update(deltaTime, this.speed, this.width, this.height, groundY);
-    const levelConfig = this.getLevelConfig();
     // PERF-DIAG #7 — detect entity spawns by watching manager.instance
     // arrays grow across the update() call. We sample lengths BEFORE each
     // manager runs, then AFTER, and any increase is recorded with a
@@ -854,6 +935,12 @@ export class Game {
     // log then correlates hitch time → nearest spawn type. This is the
     // BEFORE/AFTER comparison that the warm-up fix needs to be
     // validated against — "did the bird-spawn hitch go down?".
+    //
+    // Note: we no longer resolve getLevelConfig() here — manager
+    // update() signatures dropped the levelConfig argument because
+    // each manager keeps its own currentLevelConfig in sync via the
+    // LevelEvents bus (subscribed at construction). Managers that need
+    // the config read this.currentLevelConfig directly.
     if (!this._spawnLog) this._spawnLog = [];
     const _t0 = performance.now();
     const _lenBefore = {
@@ -867,8 +954,8 @@ export class Game {
         + (this.npcManager?.Toni?.instances?.length ?? 0)
         + (this.npcManager?.Konobari?.instances?.length ?? 0),
     };
-    this.airplaneManager.update(deltaTime, this.width, this.height, this.player, levelConfig);
-    this.birdManager.update(deltaTime, this.width, this.height, this.player, levelConfig);
+    this.airplaneManager.update(deltaTime, this.width, this.height, this.player);
+    this.birdManager.update(deltaTime, this.width, this.height, this.player);
     this.npcManager.update(deltaTime, this.width, this.height, groundY, this.player);
     // PERF-DIAG #7 — record any spawns that happened during this update.
     const _lenAfter = {
@@ -882,10 +969,26 @@ export class Game {
     };
     const _t1 = performance.now();
     if (_lenAfter.plane > _lenBefore.plane) {
-      this._spawnLog.push({ type: "airplane", t: _t1 });
+      // PERF-DIAG #8 — read spawn cost from the manager (set by spawnOne
+      // inside update()) and surface it in the [hitch↔spawn] correlation
+      // log so we know whether the hitch lined up with a heavy spawn or
+      // with something else (GC, first draw, raster, ...).
+      const mgr = this.airplaneManager;
+      this._spawnLog.push({
+        type: "airplane",
+        t: _t1,
+        ms: mgr?.lastSpawnMs ?? 0,
+        audioMs: mgr?.lastAudioMs ?? 0,
+      });
     }
     if (_lenAfter.bird > _lenBefore.bird) {
-      this._spawnLog.push({ type: `bird×${_lenAfter.bird - _lenBefore.bird}`, t: _t1 });
+      const mgr = this.birdManager;
+      this._spawnLog.push({
+        type: `bird×${_lenAfter.bird - _lenBefore.bird}`,
+        t: _t1,
+        ms: mgr?.lastSpawnMs ?? 0,
+        audioMs: mgr?.lastAudioMs ?? 0,
+      });
     }
     if (_lenAfter.npc > _lenBefore.npc) {
       this._spawnLog.push({ type: `npc×${_lenAfter.npc - _lenBefore.npc}`, t: _t1 });
@@ -911,6 +1014,15 @@ export class Game {
         this.popups.push({ x: item.x, y: item.y, age: 0, value: "+1" });
       }
     }
+    // Emit the freshly-resolved level config. emit() short-circuits
+    // when the reference didn't change (steady-state pickup that didn't
+    // cross a threshold) so the steady-state cost is one reference
+    // equality check + a Set copy. Listeners — AirplaneManager and
+    // BirdManager — re-arm their scheduleNext() only on actual
+    // transitions. Replaces the old "every-frame getLevelConfig() poll"
+    // that fed levelConfig into update() arguments that were mostly
+    // ignored.
+    this.levelEvents.emit(this.getLevelConfig());
     // Refresh HUD only when something visible to it changed (collect
     // event here; hit event in onPlayerHit; start/end reset it).
     // The DOM cache in ui.js is a backstop — these calls are cheap.

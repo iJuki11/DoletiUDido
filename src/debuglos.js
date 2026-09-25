@@ -17,7 +17,7 @@ window.__DEBUG = {
   /** Crtanje collider okvira (player, birds, airplanes, collectibles, npcs, konobari). */
   isColliders: false,
   /** Live FPS/perf overlay u gornjem lijevom kutu (drawPerfOverlay). */
-  isPerfOverlay: false,
+  isPerfOverlay: true,
   /** [parallax-spike] log kad parallax step probije 30ms. */
   isParallax: false,
   /** Worst-of-1s hitch log ([worst 1s], [hitch↔spawn], [LONGTASK]). */

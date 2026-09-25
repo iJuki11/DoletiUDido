@@ -77,6 +77,7 @@ export class BirdManager {
     audio,
     player,
     assets,
+    levelEvents,
     recipes = BIRD_RECIPES,
     minInterval = 10,
     maxInterval = 15,
@@ -107,18 +108,49 @@ export class BirdManager {
     this.partsPromise = null;
     this.partsCache = null;
     this.partsRetryAt = 0;
+    // currentLevelConfig is the single source of truth inside this
+    // manager for birdIntervalMin/Max and formation sizing. update()
+    // and spawnFormation() read from it instead of taking levelConfig
+    // as an argument, and scheduleNext() keeps it in sync when the
+    // level transitions via the LevelEvents bus.
+    this.currentLevelConfig = levelConfig;
     this.scheduleNext(levelConfig);
+    // Subscribe AFTER scheduleNext so the seed call from LevelEvents
+    // doesn't double-fire on construction (we already have the right
+    // state). The subscribe() helper invokes us once synchronously
+    // with the bus's current config to keep us aligned if the bus
+    // already holds a newer config than the one passed in.
+    if (levelEvents) {
+      this.levelEvents = levelEvents;
+      levelEvents.subscribe((newCfg) => this.scheduleNext(newCfg));
+    }
   }
 
   reset(levelConfig = getLevelConfig(DIFFICULTY.EASY)) {
     this.instances = [];
     this.timer = 0;
+    // Keep currentLevelConfig in sync with what scheduleNext() is about
+    // to use — start() in game.js calls reset() with the level config
+    // matching the active levelEvents emission, so this stays aligned
+    // with whatever LevelEvents has last emitted.
+    this.currentLevelConfig = levelConfig;
     this.scheduleNext(levelConfig);
     // Keep the prestarted loop decoded, but silence it until birds appear.
     this.audio?.silenceBird?.();
   }
 
   scheduleNext(levelConfig = getLevelConfig(DIFFICULTY.EASY)) {
+    // currentLevelConfig is the single source of truth for this manager.
+    // Anything that needs the active level (spawnFormation reads it for
+    // formation sizing via pickFormationSize) reads this field. Without
+    // keeping it in sync here, a LevelEvents-driven re-arm after a
+    // pickup that crossed the MEDIUM/HARD threshold would update
+    // nextSpawn but leave spawnFormation() reading the stale EASY
+    // config — formation sizes would lag and stay at the Easy
+    // 1-2 bird default. Keeping the assignment at the top of the
+    // function means every code path (including future enable/disable
+    // gates) sees the freshest config.
+    this.currentLevelConfig = levelConfig;
     const { birdIntervalMin, birdIntervalMax } = levelConfig;
     this.nextSpawn = rollInterval(birdIntervalMin, birdIntervalMax);
   }
@@ -233,9 +265,17 @@ export class BirdManager {
     );
   }
 
-  spawnFormation(width, height, levelConfig = getLevelConfig(DIFFICULTY.EASY)) {
+  spawnFormation(width, height) {
     const parts = this.partsCache;
     if (!parts) return false;
+    // PERF-DIAG #8 — total spawn cost. Read by game.js _spawnLog correlator.
+    // Only set when we actually push instances — if partsCache is missing
+    // we early-return false and lastSpawnMs stays 0 so the correlator
+    // doesn't blame us for a hitch that wasn't ours.
+    const _tSpawn = performance.now();
+    // currentLevelConfig is kept in sync by scheduleNext() via the
+    // LevelEvents bus — no need to take it as a parameter here.
+    const levelConfig = this.currentLevelConfig;
 
     const { key, config } = this.pickRecipe();
     const speed =
@@ -293,7 +333,16 @@ export class BirdManager {
     // One caw per formation, not per bird — the spawn is one event.
     // Bell-curve update later in update() ramps volume based on the lead
     // bird's x.
-    this.audio?.startBird?.("bird");
+    // PERF-DIAG #8 — measure audio call cost separately. noAudio is
+    // checked LIVE so toggling __DEBUG.noAudio from the console takes
+    // effect on the very next spawn.
+    if (!window.__DEBUG?.noAudio) {
+      const _tAudio = performance.now();
+      this.audio?.startBird?.("bird");
+      this.lastAudioMs = +(performance.now() - _tAudio).toFixed(2);
+    }
+    // PERF-DIAG #8 — close out spawn timing AFTER the audio call.
+    this.lastSpawnMs = +(performance.now() - _tSpawn).toFixed(2);
     // Heavy debug payload — full object literal every formation. Only log
     // when explicitly opted in via __game.debug.bird = true.
     if (window.__DEBUG?.isBird) {
@@ -308,7 +357,7 @@ export class BirdManager {
     return true;
   }
 
-  update(deltaTime, width, height, player, levelConfig = getLevelConfig(DIFFICULTY.EASY)) {
+  update(deltaTime, width, height, player) {
     if (!Number.isFinite(deltaTime) || deltaTime <= 0) return;
 
     this.timer += deltaTime;
@@ -320,8 +369,11 @@ export class BirdManager {
           return;
         }
         this.timer = 0;
-        this.scheduleNext(levelConfig);
-        this.spawnFormation(width, height, levelConfig);
+        // Pull the freshest config from currentLevelConfig (kept in
+        // sync via the LevelEvents bus) instead of accepting it as an
+        // argument — this matches the new push-based level wiring.
+        this.scheduleNext(this.currentLevelConfig);
+        this.spawnFormation(width, height);
       }
       return;
     }
@@ -397,6 +449,9 @@ export class BirdManager {
   }
 
   draw(ctx) {
+    // PERF-DIAG #8 — A/B gate. Flag is checked LIVE so toggling
+    // __DEBUG.noDraw from the console takes effect on the very next frame.
+    if (window.__DEBUG?.noDraw) return;
     for (const entry of this.instances) entry.bird.draw(ctx);
   }
 

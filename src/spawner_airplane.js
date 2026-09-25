@@ -36,7 +36,7 @@ export const AIRPLANE_RECIPES = Object.freeze({
  * and reading them inside `spawnOne` / the active-instance branch.
  */
 export class AirplaneManager {
-  constructor({ audio, assets, player, recipes = AIRPLANE_RECIPES, minInterval = 10, maxInterval = 15, spawnMarginTop = 80, spawnMarginBottom = 80, onPlayerHit, levelConfig = getLevelConfig(DIFFICULTY.EASY) } = {}) {
+  constructor({ audio, assets, player, levelEvents, recipes = AIRPLANE_RECIPES, minInterval = 10, maxInterval = 15, spawnMarginTop = 80, spawnMarginBottom = 80, onPlayerHit, levelConfig = getLevelConfig(DIFFICULTY.EASY) } = {}) {
     this.audio = audio;
     this.assets = assets;
     this.player = player;
@@ -51,21 +51,50 @@ export class AirplaneManager {
     this.onPlayerHit = typeof onPlayerHit === "function" ? onPlayerHit : null;
     this.instances = [];
     this.timer = 0;
+    // currentLevelConfig is the single source of truth inside this manager
+    // for airplaneEnabled / airplaneDamage / interval bounds. update() and
+    // spawnOne() read from it instead of taking levelConfig as an argument,
+    // and scheduleNext() keeps it in sync when the level transitions via
+    // the LevelEvents bus.
+    this.currentLevelConfig = levelConfig;
     // levelConfig must be passed here — otherwise the default EASY config
     // disables the airplane entirely (nextSpawn = Infinity) and the first
     // update() never gets a chance to schedule with the real level.
     this.scheduleNext(levelConfig);
+    // Subscribe AFTER scheduleNext so the seed call from LevelEvents
+    // doesn't double-fire on construction (we already have the right
+    // state). The subscribe() helper invokes us once synchronously
+    // with the bus's current config to keep us aligned if the bus
+    // already holds a newer config than the one passed in.
+    if (levelEvents) {
+      this.levelEvents = levelEvents;
+      levelEvents.subscribe((newCfg) => this.scheduleNext(newCfg));
+    }
   }
 
   reset(levelConfig = getLevelConfig(DIFFICULTY.EASY)) {
     this.instances = [];
     this.timer = 0;
+    // Keep currentLevelConfig in sync with what scheduleNext() is about
+    // to use — start() in game.js calls reset() with the level config
+    // matching the active levelEvents emission, so this stays aligned
+    // with whatever LevelEvents has last emitted.
+    this.currentLevelConfig = levelConfig;
     this.scheduleNext(levelConfig);
     // Keep the prestarted loop decoded, but silence it until a plane appears.
     this.audio?.silenceAirplane?.();
   }
 
   scheduleNext(levelConfig = getLevelConfig(DIFFICULTY.EASY)) {
+    // currentLevelConfig is the single source of truth for this manager.
+    // Anything that needs the active level (spawnOne, spawnFormation,
+    // pickFormationSize, …) reads this field. Without keeping it in
+    // sync here, a LevelEvents-driven re-arm after a pickup that
+    // crossed the MEDIUM/HARD threshold would update nextSpawn but
+    // leave spawnOne() reading the stale EASY config — formation
+    // sizes, damage, and any future level-gated logic would all lag
+    // a frame (or forever, if scheduleNext never fires again).
+    this.currentLevelConfig = levelConfig;
     if (!levelConfig.airplaneEnabled) {
       // Easy mode — push the next spawn far into the future so the
       // gate in update() never fires. The level can change at runtime
@@ -85,8 +114,16 @@ export class AirplaneManager {
     return { key, config: this.recipes[key] };
   }
 
-  spawnOne(width, height, levelConfig = getLevelConfig(DIFFICULTY.EASY)) {
+  spawnOne(width, height) {
+    // PERF-DIAG #8 — total spawn cost (constructor + setParts-free path +
+    // audio). Read by game.js _spawnLog correlator. Reset on entry so a
+    // skipped spawn (no recipe) leaves a 0 in lastSpawnMs and the
+    // correlator doesn't attribute a hitch to us.
+    const _tSpawn = performance.now();
     const { key, config } = this.pickRecipe();
+    // currentLevelConfig is kept in sync by scheduleNext() via the
+    // LevelEvents bus — no need to take it as a parameter here.
+    const levelConfig = this.currentLevelConfig;
     // Override per-recipe damage with the level-tuned value so a single
     // recipe definition can serve every level.
     const damage = levelConfig.airplaneDamage ?? config.damage;
@@ -118,13 +155,26 @@ export class AirplaneManager {
     });
     // Kick off the looping airplane SFX — volume is updated every frame in
     // update() based on distance from the centre of the screen.
-    this.audio?.startAirplane?.("airplane");
+    // PERF-DIAG #8 — measure audio call cost separately so a near-zero
+    // lastAudioMs proves audio wasn't the hitch cause. noAudio is checked
+    // LIVE (not cached) so toggling __DEBUG.noAudio from the console takes
+    // effect on the very next spawn.
+    let _tAudio = 0;
+    if (!window.__DEBUG?.noAudio) {
+      _tAudio = performance.now();
+      this.audio?.startAirplane?.("airplane");
+      this.lastAudioMs = +(performance.now() - _tAudio).toFixed(2);
+    }
+    // PERF-DIAG #8 — close out spawn timing AFTER the audio call so the
+    // total includes both the constructor work and the audio bootstrap.
+    // Read by game.js _spawnLog correlator.
+    this.lastSpawnMs = +(performance.now() - _tSpawn).toFixed(2);
     if (window.__DEBUG?.isAirplane) {
       console.log("[airplane] spawned", { x: enemy.x, y, recipe: key, speed: speed.toFixed(0) });
     }
   }
 
-  update(deltaTime, width, height, player, levelConfig = getLevelConfig(DIFFICULTY.EASY)) {
+  update(deltaTime, width, height, player) {
     if (!Number.isFinite(deltaTime) || deltaTime <= 0) return;
 
     // Toni pattern: tick the global timer; spawn only when there is no
@@ -134,8 +184,11 @@ export class AirplaneManager {
     if (this.instances.length === 0) {
       if (this.timer >= this.nextSpawn) {
         this.timer = 0;
-        this.scheduleNext(levelConfig);
-        this.spawnOne(width, height, levelConfig);
+        // Pull the freshest config from currentLevelConfig (kept in
+        // sync via the LevelEvents bus) instead of accepting it as an
+        // argument — this matches the new push-based level wiring.
+        this.scheduleNext(this.currentLevelConfig);
+        this.spawnOne(width, height);
       }
       return;
     }
@@ -189,6 +242,9 @@ export class AirplaneManager {
   }
 
   draw(ctx) {
+    // PERF-DIAG #8 — A/B gate. Flag is checked LIVE so toggling
+    // __DEBUG.noDraw from the console takes effect on the very next frame.
+    if (window.__DEBUG?.noDraw) return;
     for (const entry of this.instances) entry.enemy.draw(ctx);
   }
 
